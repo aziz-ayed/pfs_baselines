@@ -5,10 +5,10 @@ Four aggregators, one repo:
 
 | key | Aggregator | Survival head |
 |-----|------------|---------------|
-| **mean** | Mean‑pool | Cox PH |
-| **max** | Max‑pool | Cox PH |
-| **attn** | Gated attention (Ilse 2018) | Cox PH |
-| **transmil** | Full TransMIL (PPEG + top‑k corr + Transformer) | Cox PH |
+| **MeanPool** | Mean‑pool | Cox PH |
+| **MaxPool** | Max‑pool | Cox PH |
+| **AttnMil** | Gated attention (Ilse 2018) | Cox PH |
+| **TransMil** | Full TransMIL (PPEG + top‑k corr + Transformer) | Cox PH |
 
 Features
 * Works with CHIEF (768‑D) or UNI/H‑Optimus (1 536‑D) tiles.
