@@ -19,5 +19,6 @@ Features
 
 Quick start
 ```bash
-python -m torch.distributed.launch --nproc_per_node=8 train.py        --config configs/default.yaml
+torchrun --standalone --nproc_per_node=7 \
+         train.py --config configs/default.yaml
 ```
