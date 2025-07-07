@@ -7,8 +7,8 @@ Four aggregators, one repo:
 |-----|------------|---------------|
 | **MeanPool** | Mean‑pool | Cox PH |
 | **MaxPool** | Max‑pool | Cox PH |
-| **AttnMil** | Gated attention (Ilse 2018) | Cox PH |
-| **TransMil** | Full TransMIL (PPEG + top‑k corr + Transformer) | Cox PH |
+| **AttnMIL** | Gated attention (Ilse 2018) | Cox PH |
+| **TransMIL** | Full TransMIL (PPEG + top‑k corr + Transformer) | Cox PH |
 
 Features
 * Works with CHIEF (768‑D) or UNI/H‑Optimus (1 536‑D) tiles.
