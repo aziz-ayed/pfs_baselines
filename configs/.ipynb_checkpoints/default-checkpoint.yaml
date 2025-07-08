@@ -1,10 +1,10 @@
 feature_dir: "/storage/azizayed/features_uni_v2"
 #feature_dir: "/data/rbg/users/azizayed/chemistry/trident/outputs_tcga/20x_256px_0px_overlap/features_uni_v2"
 feature_dim: null            # 768 or 1536; null -> auto
-aggregator: "MeanPool"       # MeanPool | MaxPool | AttnMIL | transmil
+aggregator: "AttnMIL"       # MeanPool | MaxPool | AttnMIL | transmil
 batch_size: 8                # slides per GPU
-epochs: 30
-learning_rate: 1e-4
+epochs: 500
+learning_rate: 5e-5
 weight_decay: 1e-5
 topk_corr: 256               # for TransMIL
 gpus: [0,1,2,3,4,5,6]
@@ -12,7 +12,7 @@ num_workers: 4
 clinical_csv: "data/clinical_data.csv"
 wandb:
   project: tcga_survival_baselines
-  run_name: mean
+  run_name: transmil
   mode: online          # "online" | "offline" | "disabled"
   log_grads: false      # true = wandb.watch(model) on rank 0
 log_every: 50
