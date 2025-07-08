@@ -65,35 +65,45 @@ def collect_scores_from_loader(net: torch.nn.Module, loader: torch.utils.data.Da
 def eval_model(checkpoint_path: str, embed_paths: List[Path], clinical_csv: str,
                score_path: str= "evaluation_scores.csv", device: Optional[torch.device] = None):
 
-    dataset = PatchBagDataset(paths=embed_paths, clinical_csv=clinical_csv)
+    if not os.path.exists(score_path):
+        dataset = PatchBagDataset(paths=embed_paths, clinical_csv=clinical_csv)
+        device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        print(f"Loading model from {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=device)
+        model_name = checkpoint["model_name"]
+        dim = checkpoint["dim"]
+        model = eval(f"src.models.{model_name}({dim})")
+        model = model.to(device)
+        model.load_state_dict(checkpoint["model_state_dict"])
 
-    device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        loader = torch.utils.data.DataLoader(dataset, shuffle=False)
+        times, indicators, risk_scores = collect_scores_from_loader(model, loader, device=device)
 
-    print(f"Loading model from {checkpoint_path}")
-    checkpoint = torch.load(checkpoint_path, map_location=device)
-    model_name = checkpoint["model_name"]
-    dim = checkpoint["dim"]
-    model = eval(f"src.models.{model_name}({dim})")
-    model = model.to(device)
-    model.load_state_dict(checkpoint["model_state_dict"])
+        # Make a table with different columns: embed_path, times, indicators, risk_scores
+        scores_table = pd.DataFrame({
+            "embed_path": [str(p) for p in embed_paths],
+            "time": times,
+            "event": indicators,
+            "risk_score": risk_scores
+        })
+        # Create directory if it does not exist
+        score_dir = pathlib.Path(score_path).parent
+        score_dir.mkdir(parents=True, exist_ok=True)
+        print(f"Saving evaluation scores to {score_path}")
+        scores_table.to_csv(score_path, index=False)
 
-    loader = torch.utils.data.DataLoader(dataset, shuffle=False)
-    times, indicators, risk_scores = collect_scores_from_loader(model, loader, device=device)
+    else:
+        print(f"Loading existing evaluation scores from {score_path}")
+        scores_table = pd.read_csv(score_path)
+        times = scores_table["time"].values
+        indicators = scores_table["event"].values
+        risk_scores = scores_table["risk_score"].values
+
     auc, ci = calculate_auc_ci(times, indicators, risk_scores)
     print(f"Model {checkpoint_path} evaluation results:\n- AUC: {auc:.3f}\n- CI: {ci:.3f}")
 
-    # Make a table with different columns: embed_path, times, indicators, risk_scores
-    output_table = pd.DataFrame({
-        "embed_path": [str(p) for p in embed_paths],
-        "time": times,
-        "event": indicators,
-        "risk_score": risk_scores
-    })
-    # Create directory if it does not exist
-    score_dir = pathlib.Path(score_path).parent
-    score_dir.mkdir(parents=True, exist_ok=True)
-    print(f"Saving evaluation scores to {score_path}")
-    output_table.to_csv(score_path, index=False)
+    return scores_table
+
 
 def _get_parser():
     parser = argparse.ArgumentParser(description="Evaluate a survival model.")
@@ -127,7 +137,7 @@ def main():
     paths_to_eval = train_paths if split == "train" else val_paths
 
     score_path = eval_cfg.get("score_path", "evaluation_scores.csv")
-    eval_model(checkpoint_path, paths_to_eval, cfg["clinical_csv"], score_path)
+    scores_table = eval_model(checkpoint_path, paths_to_eval, cfg["clinical_csv"], score_path)
 
 if __name__ == "__main__":
     main()
