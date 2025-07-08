@@ -95,8 +95,6 @@ def run_worker(rank: int, world: int, cfg: dict):
     if world > 1:
         net = torch.nn.parallel.DistributedDataParallel(net, device_ids=[rank])
 
-    # Per your request, this line is untouched.
-    # Note: If you get a TypeError, this should be changed to torch.amp.GradScaler("cuda").
     opt, scaler = (
         torch.optim.Adam(net.parameters(), lr=float(cfg["learning_rate"]),
                          weight_decay=float(cfg["weight_decay"])),
@@ -138,7 +136,7 @@ def run_worker(rank: int, world: int, cfg: dict):
             if rank == 0:
                 bar.set_postfix(loss=loss.item())
 
-        # --- VALIDATION & LOGGING (runs once per epoch) ---
+        # --- VALIDATION & LOGGING ---
         if rank == 0:
             net.eval()
             R, T, E = [], [], []
