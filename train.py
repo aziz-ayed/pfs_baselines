@@ -133,7 +133,25 @@ def run_worker(rank: int, world: int, cfg: dict):
             feats, t, e = feats.cuda(rank), t.cuda(rank), e.cuda(rank)
             opt.zero_grad()
             with torch.amp.autocast(device_type="cuda"):
-                loss = cox_loss(net(feats), t, e)
+                mini_batches = cfg.get("mini_batches", 1)
+                if mini_batches > 1:
+                    # Split the batch into mini-batches
+                    batch_size = feats.size(0)
+                    # Use numpy to split the batch into mini-batches
+                    index = np.arange(batch_size)
+                    mini_batch_indexes = np.array_split(index, mini_batches)
+                    losses = []
+                    for cur_mini_batch_indexes in mini_batch_indexes:
+                        mini_feats = feats[cur_mini_batch_indexes]
+                        mini_t = t[cur_mini_batch_indexes]
+                        mini_e = e[cur_mini_batch_indexes]
+                        preds = net(mini_feats)
+                        loss = cox_loss(preds, mini_t, mini_e)
+                        losses.append(loss)
+                    loss = torch.stack(losses).mean()
+                else:
+                    preds = net(feats)
+                    loss = cox_loss(preds, t, e)
 
             epoch_loss += loss.item()
             scaler.scale(loss).backward()

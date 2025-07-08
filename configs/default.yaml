@@ -3,6 +3,7 @@ feature_dir: "/storage/azizayed/features_uni_v2"
 feature_dim: null            # 768 or 1536; null -> auto
 aggregator: "AttnMIL"       # MeanPool | MaxPool | AttnMIL | transmil
 batch_size: 8                # slides per GPU
+mini_batches: 1         # Split each batch into `mini_batches` before calculating loss. Used to save memory for large models.
 epochs: 500
 learning_rate: 5e-5
 weight_decay: 1e-5
