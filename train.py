@@ -1,6 +1,6 @@
 # train.py – Corrected Script
 
-import os, argparse, yaml, warnings, math
+import argparse, yaml
 import pathlib
 from datetime import timedelta
 from typing import Optional
@@ -10,15 +10,13 @@ import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
 from torch.utils.data import DataLoader, DistributedSampler
-from torch.cuda.amp import GradScaler, autocast
-from sklearn.model_selection import train_test_split
 from tqdm import tqdm                      # progress bar
 import wandb                              # experiment tracker
 
 from src.dataset import PatchBagDataset
 from src.collate import pad_collate
+from eval import calculate_auc_ci
 from src import models
-from src.metrics import harrell, td_auc
 import os
 import h5py
 
@@ -94,7 +92,8 @@ def run_worker(rank: int, world: int, cfg: dict):
     )
 
     # ---------------- model ---------------- #
-    Net = getattr(models, cfg["aggregator"] + "Cox")
+    model_name = cfg["aggregator"] + "Cox"
+    Net = getattr(models, model_name)
     if cfg['aggregator'] == 'TransMIL':
         # Only pass 'topk' to the model that actually uses it
         net = Net(dim, topk=cfg.get("topk_corr", 256)).cuda(rank)
@@ -173,15 +172,7 @@ def run_worker(rank: int, world: int, cfg: dict):
                     R.append(r); T.append(t); E.append(e)
             
             T = np.concatenate(T); E = np.concatenate(E); R = np.concatenate(R)
-            ci  = harrell(T, E, R)
-            
-            # Handle case with no events for percentile calculation
-            if np.any(E == 1):
-                eval_times = np.percentile(T[E == 1], [25, 50, 75])
-                auc = td_auc(T, E, T, E, R, eval_times)
-            else:
-                auc = 0.5 # Or np.nan, or another placeholder
-                warnings.warn("No events in validation set; cannot compute AUC.")
+            auc, ci = calculate_auc_ci(T, E, R)
 
             print(f"Epoch {epoch:03d} • CI={ci:.3f} • tAUC={auc:.3f}")
 
@@ -195,6 +186,19 @@ def run_worker(rank: int, world: int, cfg: dict):
                 })
             
             net.train()
+
+        # --- Save model checkpoint (rank‑0 only) ---
+        if rank == 0 and cfg.get("save_checkpoints", False):
+            save_path = pathlib.Path(cfg.get("save_dir", "results")) / f"{model_name}_epoch_{epoch:03d}.pth"
+            torch.save({
+                "model_name": model_name,
+                "model_state_dict": net.state_dict(),
+                "optimizer_state_dict": opt.state_dict(),
+                "scaler_state_dict": scaler.state_dict(),
+                "epoch": epoch,
+                "config": cfg
+            }, save_path)
+            print(f"Model saved to {save_path}")
 
     if rank == 0 and cfg["wandb"]["mode"] != "disabled":
         wandb.finish()
