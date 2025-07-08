@@ -1,7 +1,10 @@
 # train.py – Corrected Script
 
 import os, argparse, yaml, warnings, math
+import pathlib
 from datetime import timedelta
+from typing import Optional
+
 import numpy as np
 import torch
 import torch.distributed as dist
@@ -46,6 +49,12 @@ def run_worker(rank: int, world: int, cfg: dict):
 
     # --- Load pre-computed PATHS from the file ---
     train_paths, val_paths, saved_dim = torch.load(cfg["split_file"], weights_only=False)
+    feature_dir: Optional[str] = cfg.get("feature_dir", None)
+    if feature_dir is not None:
+        # If feature_dir is specified, change the directory of the files.
+        feature_dir: pathlib.Path = pathlib.Path(feature_dir)
+        train_paths = [feature_dir / p.name for p in train_paths]
+        val_paths = [feature_dir / p.name for p in val_paths]
 
     # --- Determine feature dimension dynamically ---
     dim = cfg.get("feature_dim")
