@@ -105,13 +105,11 @@ def debug():
 
     # eval_model(None, train_paths, clinical_csv=clinical_csv)
 
-if __name__ == "__main__":
-    debug()
-
 def _get_parser():
     parser = argparse.ArgumentParser(description="Evaluate a survival model.")
     parser.add_argument("model_path", type=str, help="Path to the trained model file.")
     parser.add_argument("split_file", type=str, help="Path torch dataset which saved paths to embedding files.")
+    parser.add_argument("--split", type=str, default="val", choices=["train", "val"],)
     parser.add_argument("clinical_csv", type=str, help="Path to the clinical CSV file.")
     parser.add_argument("output_path", type=str, help="Path to save the evaluation results.")
     parser.add_argument("--feature_dir", type=str, help="Directory in which features are stored (if different from the split file).")
@@ -133,5 +131,9 @@ def main():
     if args.limit:
         train_paths = train_paths[:args.limit]
         val_paths = val_paths[:args.limit]
+    paths_to_eval = train_paths if args.split == "train" else val_paths
 
-    eval_model(args.model_path, val_paths, args.clinical_csv, args.output_path)
+    eval_model(args.model_path, paths_to_eval, args.clinical_csv, args.output_path)
+
+if __name__ == "__main__":
+    main()

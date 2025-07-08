@@ -62,6 +62,8 @@ def run_worker(rank: int, world: int, cfg: dict):
             print("Auto-detecting feature dimension from the first training file...")
         with h5py.File(train_paths[0], "r") as f:
             dim = f["features"].shape[1]
+
+    limit_train_batches: Optional[int] = cfg.get("limit_train_batches", None)
     
     # --- Create datasets using the pre-computed paths ---
     train_set = PatchBagDataset(paths=train_paths, clinical_csv=cfg["clinical_csv"])
@@ -128,6 +130,7 @@ def run_worker(rank: int, world: int, cfg: dict):
                    desc=f"Epoch {epoch:02d}", ncols=100)
         
         # --- TRAINING LOOP ---
+        batch_num = 0
         for feats, t, e in bar:
             feats, t, e = feats.cuda(rank), t.cuda(rank), e.cuda(rank)
             opt.zero_grad()
@@ -158,9 +161,13 @@ def run_worker(rank: int, world: int, cfg: dict):
             torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
             scaler.step(opt)
             scaler.update()
+            batch_num += 1
 
             if rank == 0:
                 bar.set_postfix(loss=loss.item())
+
+            if limit_train_batches is not None and batch_num >= limit_train_batches:
+                break
 
         # --- VALIDATION & LOGGING ---
         if rank == 0:
