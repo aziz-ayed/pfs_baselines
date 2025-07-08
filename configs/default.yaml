@@ -22,3 +22,6 @@ log_every: 50
 prefetch_factor: 4
 persistent_workers: true
 split_file: "data/splits.pt"
+eval:
+  limit: null
+  score_path: "results/evaluation_scores.csv"

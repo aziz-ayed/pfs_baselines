@@ -3,12 +3,13 @@
 import argparse, yaml
 import pathlib
 from datetime import timedelta
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 import torch
 import torch.distributed as dist
 import torch.multiprocessing as mp
+from torch import nn
 from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm                      # progress bar
 import wandb                              # experiment tracker
@@ -33,6 +34,19 @@ def ddp_setup(rank: int, world: int):
     dist.init_process_group("nccl", rank=rank, world_size=world,
                             timeout=timedelta(minutes=30))
     torch.cuda.set_device(rank)
+
+def get_model(aggregator: str, dim: int, rank: int=None, topk_corr: int=256) -> Tuple[str, nn.Module]:
+    model_name = aggregator + "Cox"
+    Net = eval(model_name)
+    if aggregator == 'TransMIL':
+        # Only pass 'topk' to the model that actually uses it
+        net = Net(dim, topk=topk_corr)
+    else:
+        net = Net(dim)
+
+    if rank is not None:
+        net = net.to(rank)
+    return model_name, net
 
 
 # ------------------------------------------------------------------ main loop
@@ -64,6 +78,7 @@ def run_worker(rank: int, world: int, cfg: dict):
             dim = f["features"].shape[1]
 
     limit_train_batches: Optional[int] = cfg.get("limit_train_batches", None)
+    limit_val_batches: Optional[int] = cfg.get("limit_val_batches", None)
     
     # --- Create datasets using the pre-computed paths ---
     train_set = PatchBagDataset(paths=train_paths, clinical_csv=cfg["clinical_csv"])
@@ -94,13 +109,7 @@ def run_worker(rank: int, world: int, cfg: dict):
     )
 
     # ---------------- model ---------------- #
-    model_name = cfg["aggregator"] + "Cox"
-    Net = getattr(models, model_name)
-    if cfg['aggregator'] == 'TransMIL':
-        # Only pass 'topk' to the model that actually uses it
-        net = Net(dim, topk=cfg.get("topk_corr", 256)).cuda(rank)
-    else:
-        net = Net(dim).cuda(rank)
+    model_name, net = get_model(cfg["aggregator"], dim, rank=rank, topk_corr=cfg.get("topk_corr", 256))
 
     if world > 1:
         net = torch.nn.parallel.DistributedDataParallel(net, device_ids=[rank])
@@ -132,6 +141,9 @@ def run_worker(rank: int, world: int, cfg: dict):
         # --- TRAINING LOOP ---
         batch_num = 0
         for feats, t, e in bar:
+            if limit_train_batches is not None and batch_num >= limit_train_batches:
+                break
+            batch_num += 1
             feats, t, e = feats.cuda(rank), t.cuda(rank), e.cuda(rank)
             opt.zero_grad()
             with torch.amp.autocast(device_type="cuda"):
@@ -161,44 +173,50 @@ def run_worker(rank: int, world: int, cfg: dict):
             torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
             scaler.step(opt)
             scaler.update()
-            batch_num += 1
 
             if rank == 0:
                 bar.set_postfix(loss=loss.item())
 
-            if limit_train_batches is not None and batch_num >= limit_train_batches:
-                break
-
         # --- VALIDATION & LOGGING ---
         if rank == 0:
             net.eval()
-            R, T, E = [], [], []
-            with torch.no_grad():
-                for feats, t, e in tqdm(val_loader, desc="Val", ncols=100):
-                    r = net(feats.cuda(rank)).cpu()
-                    R.append(r); T.append(t); E.append(e)
-            
-            T = np.concatenate(T); E = np.concatenate(E); R = np.concatenate(R)
-            auc, ci = calculate_auc_ci(T, E, R)
+            if limit_val_batches is not None and limit_val_batches > 0:
+                R, T, E = [], [], []
+                batch_num = 0
+                with torch.no_grad():
+                    for feats, t, e in tqdm(val_loader, desc="Val", ncols=100):
+                        if limit_val_batches is not None and batch_num >= limit_val_batches:
+                            break
+                        batch_num += 1
+                        r = net(feats.cuda(rank)).cpu()
+                        R.append(r); T.append(t); E.append(e)
 
-            print(f"Epoch {epoch:03d} • CI={ci:.3f} • tAUC={auc:.3f}")
+                T = np.concatenate(T); E = np.concatenate(E); R = np.concatenate(R)
+                auc, ci = calculate_auc_ci(T, E, R)
 
-            if cfg["wandb"]["mode"] != "disabled":
-                avg_epoch_loss = epoch_loss / len(train_loader)
-                wandb.log({
-                    "train/epoch_loss": avg_epoch_loss,
-                    "val/ci": ci,
-                    "val/auc": auc,
-                    "epoch": epoch
-                })
+                print(f"Epoch {epoch:03d} • CI={ci:.3f} • tAUC={auc:.3f}")
+
+                if cfg["wandb"]["mode"] != "disabled":
+                    avg_epoch_loss = epoch_loss / len(train_loader)
+                    wandb.log({
+                        "train/epoch_loss": avg_epoch_loss,
+                        "val/ci": ci,
+                        "val/auc": auc,
+                        "epoch": epoch
+                    })
+            else:
+                print(f"Epoch {epoch:03d} • No validation set provided.")
             
             net.train()
 
         # --- Save model checkpoint (rank‑0 only) ---
         if rank == 0 and cfg.get("save_checkpoints", False):
-            save_path = pathlib.Path(cfg.get("save_dir", "results")) / f"{model_name}_epoch_{epoch:03d}.pth"
+            save_dir = pathlib.Path(cfg.get("save_dir", "results"))
+            save_dir.mkdir(parents=True, exist_ok=True)
+            save_path = save_dir / f"{model_name}_epoch_{epoch:03d}.pth"
             torch.save({
                 "model_name": model_name,
+                "dim": dim,
                 "model_state_dict": net.state_dict(),
                 "optimizer_state_dict": opt.state_dict(),
                 "scaler_state_dict": scaler.state_dict(),
