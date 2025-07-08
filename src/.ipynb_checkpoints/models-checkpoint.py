@@ -36,7 +36,7 @@ class MaxPoolCox(nn.Module):
 
 
 class AttnMILCox(nn.Module):
-    """Gated‑attention MIL (Ilse et al., 2018) with a Cox head."""
+    """Gated‑attention MIL (Ilse et al., 2018) with a Cox head."""
 
     def __init__(self, d: int, h: int = 256):
         super().__init__()
@@ -84,11 +84,11 @@ class TransMILCox(nn.Module):
     d : int
         Patch embedding dimension (e.g. 768 for CTransPath, 1536 for UNI).
     depth : int, optional
-        Number of Transformer encoder layers (default = 2).
+        Number of Transformer encoder layers (default = 2).
     ff : int, optional
-        Feed‑forward network width inside each encoder layer (default = 1024).
+        Feed‑forward network width inside each encoder layer (default = 1024).
     topk : int, optional
-        Top‑k tokens to keep in the correlation attention (default = 256).
+        Top‑k tokens to keep in the correlation attention (default = 256).
     """
 
     def __init__(self, d: int, depth: int = 2, ff: int = 512, topk: int = 128):
