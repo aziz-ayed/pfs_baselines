@@ -91,7 +91,7 @@ class TransMILCox(nn.Module):
         Top‑k tokens to keep in the correlation attention (default = 256).
     """
 
-    def __init__(self, d: int, depth: int = 2, ff: int = 1024, topk: int = 256):
+    def __init__(self, d: int, depth: int = 2, ff: int = 512, topk: int = 128):
         super().__init__()
         # choose n_heads ≤16 that divides d
         try:
@@ -146,18 +146,30 @@ class TransMILCox(nn.Module):
         # compute rectangle dims common to the batch (bags are padded to same S)
         H = math.ceil(math.sqrt(S))
         W = math.ceil(S / H)
-
+    
+        # --- Start of Fix ---
+        # Calculate the padding required
+        num_patches_padded = H * W
+        pad_len = num_patches_padded - S
+    
+        # Pad the feature tensor 'x'.
+        # F.pad format is (pad_left, pad_right, pad_top, pad_bottom, ...)
+        # We are padding the sequence dimension (dim=1) only on the right.
+        if pad_len > 0:
+            x = F.pad(x, (0, 0, 0, pad_len))
+        # --- End of Fix ---
+    
         # prepend CLS & add positional encoding
-        x = torch.cat([self.cls_tok.expand(B, -1, -1), x], dim=1)  # (B,S+1,d)
+        x = torch.cat([self.cls_tok.expand(B, -1, -1), x], dim=1)  # (B,S_padded+1,d)
         x = self.ppeg(x, H, W)
         x = self.pre_norm(x)
-
+    
         cls_tok, feat_tok = x[:, :1], x[:, 1:]
         feat_tok = self._topk_corr(feat_tok)
         x = torch.cat([cls_tok, feat_tok], dim=1)
-
-
+    
+    
         for layer in self.encoder:
             x = layer(x)
-            
+    
         return self.head(x[:, 0]).squeeze(-1)
