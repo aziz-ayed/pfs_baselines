@@ -115,12 +115,9 @@ def collect_scores(checkpoint_path: str, embed_paths: List[Path], clinical_csv: 
     else:
         print(f"Loading existing evaluation scores from {score_path}")
         scores_table = pd.read_csv(score_path)
-        times = scores_table["time"].values
-        indicators = scores_table["event"].values
-        risk_scores = scores_table["risk_score"].values
-
-    auc, ci = calculate_auc_ci(times, indicators, risk_scores)
-    print(f"Model {checkpoint_path} evaluation results:\n- AUC: {auc:.3f}\n- CI: {ci:.3f}")
+        # times = scores_table["time"].values
+        # indicators = scores_table["event"].values
+        # risk_scores = scores_table["risk_score"].values
 
     return scores_table
 
@@ -242,6 +239,22 @@ def main():
     score_path = eval_cfg.get("score_path", "evaluation_scores.csv")
     scores_table = collect_scores(checkpoint_path, paths_to_eval, cfg["clinical_csv"], score_path, cfg=cfg)
 
+    # Overall performance metrics
+    auc, ci = calculate_auc_ci(scores_table["time"].values, scores_table["event"], scores_table["risk_score"].values)
+    print(f"Model {checkpoint_path} overall evaluation results:\nAUC: {auc:.3f}, CI: {ci:.3f} (N={len(scores_table)})")
+    print(f"Events: {scores_table['event'].sum().astype(int)} / {len(scores_table)} ({scores_table['event'].mean() * 100:.1f}%)")
+
+    stratify_by = ["project_id"]
+    for col in stratify_by:
+        if col not in scores_table.columns:
+            raise ValueError(f"Column '{col}' not found in the scores table.")
+        print(f"Stratified by {col}:")
+        for value, group in scores_table.groupby(col):
+            N = len(group)
+            auc, ci = calculate_auc_ci(group["time"].values, group["event"], group["risk_score"].values)
+            print(f"  {col}={value}: AUC={auc:.3f}, CI={ci:.3f} (N={N}). Events: {group['event'].sum().astype(int)} / {N} ({group['event'].mean() * 100:.1f}%)")
+
+    return
     scores_table = calculate_brier_scores(scores_table)
 
     plots_path = eval_cfg.get("plots_path", "evaluation_plots.pdf")
