@@ -1,4 +1,5 @@
 import argparse
+import json
 import os
 import pathlib
 from pathlib import Path
@@ -11,6 +12,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 import numpy as np
 import pandas as pd
+import sklearn.metrics
 import torch
 import tqdm
 
@@ -151,7 +153,7 @@ def risks_to_probabilities(times, events, risks, eval_times=None):
     probs = probs[inv_order, :]  # Restore original order
     return eval_times, probs
 
-def calculate_brier_scores(score_table: pd.DataFrame):
+def calculate_aucs_timepoints(score_table: pd.DataFrame):
     days_to_event_col = "time"
     follow_up_col = "max_follow_up_days"
     event_col = "event"
@@ -166,39 +168,30 @@ def calculate_brier_scores(score_table: pd.DataFrame):
         {"label": "3m", "days": 90},
         {"label": "6m", "days": 180},
         {"label": "12m", "days": 365},
-        {"label": "24m", "days": 730}
+        {"label": "18m", "days": 540},
+        {"label": "24m", "days": 730},
+        {"label": "10y", "days": 3650},
     ]
-    # eval_times = [th["days"] for th in time_horizons]
-    eval_times, probs = risks_to_probabilities(
-        score_table[days_to_event_col].values,
-        score_table[event_col].values,
-        score_table[score_col].values,
-    )
 
     for th in time_horizons:
         th_label = th["label"]
         th_days = th["days"]
 
-        # If we don't have the exact time, use the closest one
-        diffs = np.abs(eval_times - th_days)
-        idx = np.argmin(diffs)
-        if diffs[idx] > 10: # If the closest time is too far, warn
-            print(f"Warning: No evaluation time close to {th_days} days found. Using closest time {eval_times[idx]} days.")
+        positive_within_window = (score_table[days_to_event_col] <= th_days) & (score_table[event_col] == 1)
+        keep_rows = positive_within_window | (score_table[follow_up_col] >= th_days)
+        positive_within_window = positive_within_window[keep_rows]
+        risk_score = score_table.loc[keep_rows, score_col].values
 
-        keep_rows = (score_table[days_to_event_col] <= th_days) | (score_table[follow_up_col] >= th_days)
+        cur_time_auc = sklearn.metrics.roc_auc_score(positive_within_window, risk_score)
+        cur_time_prc = sklearn.metrics.average_precision_score(positive_within_window, risk_score)
+        th[f"auc"] = cur_time_auc
+        th[f"prc"] = cur_time_prc
+        th[f"n"] = len(risk_score)
+        th[f"events"] = positive_within_window.sum()
 
-        probs_at_th = probs[keep_rows, idx]
-        indicator_value = score_table.loc[keep_rows, event_col].values
+    auc_table = pd.DataFrame(time_horizons)
 
-        # Calculate Brier score
-        brier_score = (probs_at_th - indicator_value) ** 2
-        mean_brier_score = brier_score.mean()
-        print(f"Mean Brier score at {th_label} ({th_days} days): {mean_brier_score:.4f}")
-
-        score_table.loc[keep_rows, f"brier_{th_label}"] = brier_score
-
-    return score_table
-
+    return auc_table
 
 
 def _get_parser():
@@ -216,7 +209,17 @@ def main():
     checkpoint_path = opts.checkpoint_path if hasattr(opts, "checkpoint_path") else cfg.get("checkpoint_path", None)
     assert checkpoint_path is not None, "Checkpoint path must be specified either in command line or config file."
 
-    train_paths, val_paths, saved_dim = torch.load(cfg["split_file"], weights_only=False)
+    if cfg["split_file"].endswith(".pt"):
+        train_paths, val_paths, saved_dim = torch.load(cfg["split_file"], weights_only=False)
+    elif cfg["split_file"].endswith(".json"):
+        with open(cfg["split_file"], "r") as f:
+            split_data = json.load(f)
+        train_paths = [Path(p) for p in split_data["train"]]
+        val_paths = [Path(p) for p in split_data["val"]]
+        saved_dim = split_data.get("dim", None)
+    else:
+        raise ValueError(f"Unsupported split file format: {cfg['split_file']}")
+
     feature_dir = cfg.get("feature_dir", None)
     if feature_dir is not None:
         # If feature_dir is specified, change the directory of the files.
@@ -238,13 +241,23 @@ def main():
 
     score_path = eval_cfg.get("score_path", "evaluation_scores.csv")
     scores_table = collect_scores(checkpoint_path, paths_to_eval, cfg["clinical_csv"], score_path, cfg=cfg)
+    cancer_types = {
+        "BRCA": "Breast",
+        "LUAD": "Lung",
+        "LUSC": "Lung",
+        "READ": "Colon",
+        "COAD": "Colon",
+    }
+    scores_table["cancer_type"] = scores_table["project_id"].apply(
+        lambda x: cancer_types.get(x.split("-")[-1], "Other")
+    )
 
     # Overall performance metrics
     auc, ci = calculate_auc_ci(scores_table["time"].values, scores_table["event"], scores_table["risk_score"].values)
     print(f"Model {checkpoint_path} overall evaluation results:\nAUC: {auc:.3f}, CI: {ci:.3f} (N={len(scores_table)})")
     print(f"Events: {scores_table['event'].sum().astype(int)} / {len(scores_table)} ({scores_table['event'].mean() * 100:.1f}%)")
 
-    stratify_by = ["project_id"]
+    stratify_by = ["cancer_type"]
     for col in stratify_by:
         if col not in scores_table.columns:
             raise ValueError(f"Column '{col}' not found in the scores table.")
@@ -254,31 +267,43 @@ def main():
             auc, ci = calculate_auc_ci(group["time"].values, group["event"], group["risk_score"].values)
             print(f"  {col}={value}: AUC={auc:.3f}, CI={ci:.3f} (N={N}). Events: {group['event'].sum().astype(int)} / {N} ({group['event'].mean() * 100:.1f}%)")
 
-    return
-    scores_table = calculate_brier_scores(scores_table)
+    aucs_timepoints = calculate_aucs_timepoints(scores_table)
+    print(f"AUCs at different time points:\n{aucs_timepoints}")
 
     plots_path = eval_cfg.get("plots_path", "evaluation_plots.pdf")
     if plots_path:
         import seaborn as sns
         import matplotlib.pyplot as plt
         from matplotlib.backends.backend_pdf import PdfPages
-        sns.set_theme("notebook", style="whitegrid")
+        sns.set_theme("notebook", style="whitegrid", font_scale=1.2)
+
         with PdfPages(plots_path) as pdf:
-            # Boxplot of risk scores stratified by event and cancer type (column "project_id")
+            # Scatter plot of risk scores vs time, using only event-positive samples.
+            # Colored by cancer type.
             fig = plt.figure(figsize=(10, 6))
-            sns.boxplot(x="project_id", y="risk_score", hue="event", data=scores_table)
+            sns.scatterplot(x="time", y="risk_score", hue="cancer_type", data=scores_table[scores_table["event"] == 1])
+            plt.title("Risk Scores vs Time (Event-Positive Samples)")
+            plt.xlabel("Time (days)")
+            plt.ylabel("Risk Score")
+            plt.legend(title="Cancer Type", loc="upper right")
+            pdf.savefig(fig)
+
+            # Boxplot of risk scores stratified by event and cancer type
+            fig = plt.figure(figsize=(10, 6))
+            sns.boxplot(x="cancer_type", y="risk_score", hue="event", data=scores_table)
             plt.title("Risk Scores by Cancer Type and Event")
             plt.xlabel("Cancer Type")
             plt.ylabel("Risk Score")
             plt.legend(title="Event", loc="upper right")
             pdf.savefig(fig)
 
+    if False:
             # Histogram of Brier scores, stratified by cancer type
             fig = plt.figure(figsize=(10, 6))
             brier_cols = [col for col in scores_table.columns if col.startswith("brier_")]
             brier_cols = brier_cols[0:1]
             for brier_col in brier_cols:
-                sns.histplot(scores_table, x=brier_col, hue="project_id", kde=True, stat="density", common_norm=False)
+                sns.histplot(scores_table, x=brier_col, hue="cancer_type", kde=True, stat="density", common_norm=False)
             plt.title("Brier Scores Distribution by Cancer Type")
             plt.xlabel("Brier Score")
             plt.ylabel("Density")
@@ -286,7 +311,7 @@ def main():
 
             # Boxplot of Brier scores by cancer type
             fig = plt.figure(figsize=(10, 6))
-            sns.boxplot(x="project_id", y=brier_cols[0], data=scores_table)
+            sns.boxplot(x="cancer_type", y=brier_cols[0], data=scores_table)
             plt.title("Brier Scores by Cancer Type")
             plt.xlabel("Cancer Type")
             plt.ylabel("Brier Score")
