@@ -1,6 +1,7 @@
 # train_clinical.py – Train a model based on clinical features
 
 import argparse, yaml
+import copy
 import json
 import multiprocessing
 import os
@@ -388,16 +389,15 @@ if __name__ == "__main__":
     configs = []
     for seed in seeds:
         var_keys = ["seed", "split", "aggregator"]
-        cfg = orig_cfg.copy()
-        cfg["seed"] = seed
-        for vk in var_keys:
-            if vk not in cfg and vk in cfg["eval"]:
-                cfg[vk] = cfg["eval"][vk]
-        fill_in_yaml_variables_recursive(cfg)
         sub_keys = ["eval", "wandb"]
-        for sk in sub_keys:
-            if sk in cfg:
-                fill_in_yaml_variables_recursive(cfg[sk], cfg)
+
+        cfg = copy.deepcopy(orig_cfg)
+        cfg["seed"] = seed
+
+        cfg["wandb"]["run_name"] = cfg["wandb"]["run_name"].format(**cfg)
+        cfg["save_dir"] = cfg["save_dir"].format(**cfg)
+        cfg["eval"]["score_path"] = cfg["eval"]["score_path"].format(**{**cfg, **cfg["eval"]})
+        cfg["eval"]["plots_path"] = cfg["eval"]["plots_path"].format(**{**cfg, **cfg["eval"]})
 
         configs.append(cfg.copy())
 
