@@ -6,10 +6,10 @@
 feature_dim: 57
 aggregator: "Passthrough"       # MeanPool | MaxPool | AttnMIL | transmil
 batch_size: 128                # slides per GPU
-seed: 12345
+seed: 1
 limit_val_batches: null
 mini_batches: 1         # Split each batch into `mini_batches` before calculating loss. Used to save memory for large models.
-epochs: 10
+epochs: 100
 learning_rate: 5e-5
 weight_decay: 1e-5
 topk_corr: 256               # for TransMIL
@@ -20,7 +20,7 @@ num_workers: 4
 clinical_csv: "data/clinical_model_features.csv"
 wandb:
   project: tcga_survival_baselines
-  run_name: passthrough_clinical_excl_pathology
+  run_name: passthrough_clinical_all
   mode: online          # "online" | "offline" | "disabled"
   log_grads: true      # true = wandb.watch(model) on rank 0
 log_every: 50

@@ -123,6 +123,9 @@ def collect_scores(checkpoint_path: str, clinical_csv: str, split: str="val",
             "max_follow_up_days": clinical_df["max_follow_up_days"].values,
         })
 
+        # Join with the clinical data
+        scores_table = scores_table.merge(clinical_df, on="submitter_id", how="left", suffixes=("", "_x"))
+
         # Create directory if it does not exist
         score_dir = pathlib.Path(score_path).parent
         score_dir.mkdir(parents=True, exist_ok=True)
