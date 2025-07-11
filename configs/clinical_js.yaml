@@ -26,7 +26,7 @@ wandb:
 log_every: 50
 prefetch_factor: 4
 persistent_workers: true
-split_file: "data/splits.json"
+split_file: "data/clean_splits.csv"
 eval:
   limit: null
   split: val # train | val | test

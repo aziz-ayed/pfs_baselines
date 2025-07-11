@@ -110,8 +110,18 @@ def run_worker(cfg: dict):
     split_path: Optional[str] = cfg.get("split_file", None)
     assert os.path.exists(split_path), f"Split file {split_path} does not exist."
     if split_path:
-        with open(split_path, "r") as f:
-            split_dict = json.load(f)
+        if split_path.endswith(".json"):
+            with open(split_path, "r") as f:
+                split_dict = json.load(f)
+        elif split_path.endswith(".csv"):
+            split_df = pd.read_csv(split_path)
+            _id_col = split_df.columns[0]  if split_df.columns[0] in {"patient_id", "submitter_id"} else None
+            assert _id_col is not None, "Split file must contain a column for patient IDs."
+            split_dict = {
+                "train": split_df[split_df["split"] == "train"][_id_col].tolist(),
+                "val": split_df[split_df["split"].isin({"val", "dev", "validation"})][_id_col].tolist(),
+                "test": split_df[split_df["split"] == "test"][_id_col].tolist(),
+            }
 
     # Hacks
     if "progression_or_recurrence" in clinical_df.columns:
@@ -137,7 +147,7 @@ def run_worker(cfg: dict):
 
     # Create column to label split
     if id_col in clinical_df.columns:
-        for label in ["train", "val"]:
+        for label in ["train", "val", "test"]:
             cur_pids = split_dict[label]
             clinical_df.loc[clinical_df[id_col].isin(cur_pids), "split"] = label
 

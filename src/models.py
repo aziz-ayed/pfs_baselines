@@ -12,7 +12,7 @@ from torch import Tensor
 # -----------------------------------------------------------------------------
 
 class PassthroughCox(nn.Module):
-    """Mean‑pooling MIL baseline followed by a linear Cox head."""
+    """Very basic linear model."""
 
     def __init__(self, d: int):
         super().__init__()
