@@ -32,7 +32,7 @@ def cox_loss(risk, t, e, eps=1e-8, clamp_min=-10.0, clamp_max=10.0):
     risk_clamped = risk[idx].clamp(min=clamp_min, max=clamp_max)
     hr  = torch.exp(risk[idx])
     cumsum_hr = torch.cumsum(hr, 0).clamp(min=eps)
-    return (-(risk_clamped - torch.log(cumsum_hr)) * e[idx]).mean()
+    return torch.nanmean(-(risk_clamped - torch.log(cumsum_hr)) * e[idx])
 
 
 def get_model(aggregator: str, dim: int, rank: int=None, topk_corr: int=256) -> Tuple[str, nn.Module]:
@@ -201,9 +201,8 @@ def run_worker(cfg: dict):
                     loss = cox_loss(preds, t, e)
 
             if torch.isnan(loss):
-                print(f"feats: {feats}")
-                print(f"targets: {targets}")
-                exit(0)
+                print(f"NaN loss encountered at epoch {epoch}, batch {batch_num}. Skipping this batch.")
+                continue
 
             epoch_loss += loss.item()
             # scaler.scale(loss).backward()
