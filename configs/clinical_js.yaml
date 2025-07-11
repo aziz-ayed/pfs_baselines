@@ -14,7 +14,7 @@ learning_rate: 5e-5
 weight_decay: 1e-5
 topk_corr: 256               # for TransMIL
 save_checkpoints: true
-save_dir: "results/tcga/clinical_js"
+save_dir: "results/tcga/{seed}/clinical_js"
 gpus: [0,1,2,3,4,5,6]
 num_workers: 4
 clinical_csv: "data/clinical_model_features.csv"
@@ -30,6 +30,6 @@ split_file: "data/clean_splits.csv"
 eval:
   limit: null
   split: val # train | val | test
-  score_path: "results/tcga/clinical_evaluation_scores_val.csv"
-  plots_path: "results/tcga/clinical_evaluation_plots_val.pdf"
+  score_path: "results/tcga/{seed}/clinical_evaluation_scores_{split}.csv"
+  plots_path: "results/tcga/{seed}/clinical_evaluation_plots_{split}.pdf"
   overwrite: true

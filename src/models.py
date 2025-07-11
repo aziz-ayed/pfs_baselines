@@ -16,7 +16,7 @@ class PassthroughCox(nn.Module):
 
     def __init__(self, d: int):
         super().__init__()
-        self.beta = nn.Linear(d, 1, bias=False)
+        self.beta = nn.Linear(d, 1, bias=True)
 
     def forward(self, x: Tensor) -> Tensor:  # x: (B, d)
         return self.beta(x) # (B,)

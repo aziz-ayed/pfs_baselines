@@ -5,6 +5,7 @@ import json
 import os
 import h5py
 import pathlib
+import pprint
 import random
 from datetime import timedelta
 from typing import Optional, Tuple
@@ -85,8 +86,20 @@ def df_to_dataset(df, feature_cols, target_cols) -> torch.utils.data.Dataset:
     dataset = torch.utils.data.TensorDataset(features, targets)
     return dataset
 
-def run_worker(cfg: dict):
+def fill_in_yaml_variables_recursive(cfg, source=None):
+    if source is None:
+        source = cfg
+    for key, value in cfg.items():
+        if isinstance(value, dict):
+            fill_in_yaml_variables_recursive(value, source)
+        elif isinstance(value, str):
+            try:
+                cfg[key] = value.format(**source)
+            except KeyError:
+                pass
+    return cfg
 
+def run_worker(cfg: dict):
     clinical_csv = cfg["clinical_csv"]
     clinical_df = pd.read_csv(clinical_csv)
     id_col = "submitter_id"
@@ -123,20 +136,29 @@ def run_worker(cfg: dict):
                 "test": split_df[split_df["split"] == "test"][_id_col].tolist(),
             }
 
+    def _is_progression(row):
+        prog_days = row["days_to_progression"]
+        rec_days = row["days_to_recurrence"]
+        # is_yes = row["progression_or_recurrence"].lower() == "yes"
+        is_yes = str(row["progression_recurrence_event"]).lower() == "yes"
+        bool_prog = is_yes or (not pd.isna(prog_days) and prog_days > 0) or (not pd.isna(rec_days) and rec_days > 0)
+        return 1 if bool_prog else 0
+
+    if "max_follow_up_days" not in clinical_df.columns:
+        clinical_df["max_follow_up_days"] = clinical_df[["days_to_follow_up", "days_to_last_follow_up", "days_to_death"]].max(axis=1)
+    if "days_to_progression_recurrence" not in clinical_df.columns:
+        event_columns = ["days_to_progression", "days_to_recurrence", "days_to_follow_up", "days_to_last_follow_up", "days_to_death"]
+        clinical_df["days_to_progression_recurrence"] = clinical_df[event_columns].min(axis=1).clip(lower=0)
+
     # Hacks
     if "progression_or_recurrence" in clinical_df.columns:
         # Rename columns to match expected names
         clinical_df.rename(columns={
             "progression_or_recurrence": "progression_recurrence_event",
         }, inplace=True)
-        clinical_df["progression_recurrence_event"] = clinical_df["progression_recurrence_event"].apply(
-            lambda x: 1 if str(x).lower() == "Yes".lower() else 0
+        clinical_df["progression_recurrence_event"] = clinical_df.apply(
+            _is_progression, axis=1
         )
-    if "max_follow_up_days" not in clinical_df.columns:
-        clinical_df["max_follow_up_days"] = clinical_df[["days_to_follow_up", "days_to_last_follow_up", "days_to_death"]].max(axis=1)
-    if "days_to_progression_recurrence" not in clinical_df.columns:
-        event_columns = ["days_to_progression", "days_to_recurrence", "days_to_follow_up", "days_to_last_follow_up", "days_to_death"]
-        clinical_df["days_to_progression_recurrence"] = clinical_df[event_columns].min(axis=1)
 
     target_cols = ["time", "event"]
     if "time" not in clinical_df.columns or "event" not in clinical_df.columns:
@@ -336,7 +358,14 @@ if __name__ == "__main__":
                         help=argparse.SUPPRESS)
     opts, _ = parser.parse_known_args()
 
+    # Fill in variables from yaml config
     cfg = yaml.safe_load(open(opts.config))
-    # world = len(cfg["gpus"])
+    var_keys = ["seed", "split"]
+    for vk in var_keys:
+        if vk not in cfg and vk in cfg["eval"]:
+            cfg[vk] = cfg["eval"][vk]
+    fill_in_yaml_variables_recursive(cfg)
+    fill_in_yaml_variables_recursive(cfg["eval"], cfg)
+    pprint.pprint(cfg)
 
     run_worker(cfg)
