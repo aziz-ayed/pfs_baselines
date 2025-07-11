@@ -11,6 +11,16 @@ from torch import Tensor
 # Simple MIL baselines ---------------------------------------------------------
 # -----------------------------------------------------------------------------
 
+class PassthroughCox(nn.Module):
+    """Mean‑pooling MIL baseline followed by a linear Cox head."""
+
+    def __init__(self, d: int):
+        super().__init__()
+        self.beta = nn.Linear(d, 1, bias=False)
+
+    def forward(self, x: Tensor) -> Tensor:  # x: (B, d)
+        return self.beta(x) # (B,)
+
 class MeanPoolCox(nn.Module):
     """Mean‑pooling MIL baseline followed by a linear Cox head."""
 

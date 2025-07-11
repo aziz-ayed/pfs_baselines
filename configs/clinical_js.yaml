@@ -1,0 +1,34 @@
+# feature_dir: "/data/rbg/shared/datasets/NLST/NLST/Pathology/features/hoptimus1"
+#feature_dir: "/data/rbg/shared/datasets/TCGA/Pathology/trident/features_hoptimus1"
+#feature_dir: "/storage/silterra/features_hoptimus1"
+#feature_dir: "/storage/azizayed/features_uni_v2"
+#feature_dir: "/data/rbg/users/azizayed/chemistry/trident/outputs_tcga/20x_256px_0px_overlap/features_uni_v2"
+feature_dim: 57
+aggregator: "Passthrough"       # MeanPool | MaxPool | AttnMIL | transmil
+batch_size: 32                # slides per GPU
+limit_val_batches: null
+mini_batches: 1         # Split each batch into `mini_batches` before calculating loss. Used to save memory for large models.
+epochs: 50
+learning_rate: 5e-5
+weight_decay: 1e-5
+topk_corr: 256               # for TransMIL
+save_checkpoints: true
+save_dir: "results/tcga/clinical_js"
+gpus: [0,1,2,3,4,5,6]
+num_workers: 4
+clinical_csv: "data/clinical_model_features.csv"
+wandb:
+  project: tcga_survival_baselines
+  run_name: passthrough_clinical
+  mode: offline          # "online" | "offline" | "disabled"
+  log_grads: false      # true = wandb.watch(model) on rank 0
+log_every: 50
+prefetch_factor: 4
+persistent_workers: true
+split_file: "data/splits.json"
+eval:
+  limit: null
+  split: train # train | val | test
+  score_path: "results/tcga/clinical_evaluation_scores_train.csv"
+  plots_path: "results/tcga/clinical_evaluation_plots_train.pdf"
+  overwrite: false

@@ -1,0 +1,280 @@
+# train_clinical.py – Train a model based on clinical features
+
+import argparse, yaml
+import json
+import os
+import h5py
+import pathlib
+from datetime import timedelta
+from typing import Optional, Tuple
+
+import numpy as np
+import pandas as pd
+import torch
+import torch.distributed as dist
+import torch.multiprocessing as mp
+from torch import nn
+from torch.utils.data import DataLoader, DistributedSampler
+from tqdm import tqdm                      # progress bar
+import wandb                              # experiment tracker
+
+from src.dataset import PatchBagDataset
+from src.collate import pad_collate
+from eval import calculate_auc_ci
+from src import models
+from src.models import *
+
+
+# --------------------------------------------------------------------- utils
+
+def cox_loss(risk, t, e):
+    idx = torch.argsort(t, descending=True)
+    hr  = torch.exp(risk[idx])
+    return (-(risk[idx] - torch.log(torch.cumsum(hr, 0))) * e[idx]).mean()
+
+
+def get_model(aggregator: str, dim: int, rank: int=None, topk_corr: int=256) -> Tuple[str, nn.Module]:
+    model_name = aggregator + "Cox"
+    Net = eval(model_name)
+    if aggregator == 'TransMIL':
+        # Only pass 'topk' to the model that actually uses it
+        net = Net(dim, topk=topk_corr)
+    else:
+        net = Net(dim)
+
+    if rank is not None:
+        net = net.to(rank)
+    return model_name, net
+
+
+# ------------------------------------------------------------------ main loop
+    
+torch.set_num_threads(1)
+os.environ["HDF5_USE_FILE_LOCKING"] = "FALSE"
+
+
+def _choose_time(row):
+    if row["progression_recurrence_event"] == 1:
+        return row["days_to_progression_recurrence"]
+    return row["max_follow_up_days"]
+
+def prepare_time_event_columns(clinical_df: pd.DataFrame):
+    time = clinical_df.apply(_choose_time, axis=1)
+    event = clinical_df["progression_recurrence_event"]
+    return time, event
+
+def run_worker(cfg: dict):
+
+    clinical_csv = cfg["clinical_csv"]
+    clinical_df = pd.read_csv(clinical_csv)
+    id_col = "submitter_id"
+    # device = torch.device(f"cuda:{cfg['gpus'][0]}") if torch.cuda.is_available() else torch.device("cpu")
+    device = torch.device("cpu")
+    rank = 0
+
+    # Hack
+    if "progression_or_recurrence" in clinical_df.columns:
+        # Rename columns to match expected names
+        clinical_df.rename(columns={
+            "progression_or_recurrence": "progression_recurrence_event",
+        }, inplace=True)
+        clinical_df["progression_recurrence_event"] = clinical_df["progression_recurrence_event"].apply(
+            lambda x: 1 if str(x).lower() == "Yes".lower() else 0
+        )
+    if "max_follow_up_days" not in clinical_df.columns:
+        clinical_df["max_follow_up_days"] = clinical_df[["days_to_follow_up", "days_to_last_follow_up"]].max(axis=1)
+    if "days_to_progression_recurrence" not in clinical_df.columns:
+        event_columns = ["days_to_progression", "days_to_recurrence", "days_to_follow_up", "days_to_last_follow_up", "days_to_death"]
+        clinical_df["days_to_progression_recurrence"] = clinical_df[event_columns].min(axis=1)
+    keep_rows = pd.notna(clinical_df["days_to_progression_recurrence"]) & pd.notna(clinical_df["progression_recurrence_event"])
+    print(f"Keeping {keep_rows.sum()} rows out of {len(clinical_df)} based on 'days_to_progression_recurrence' and 'progression_recurrence_event'.")
+    clinical_df = clinical_df[keep_rows].reset_index(drop=True)
+
+
+    split_path: Optional[str] = cfg.get("split_file", None)
+    assert os.path.exists(split_path), f"Split file {split_path} does not exist."
+    if split_path:
+        with open(split_path, "r") as f:
+            split_dict = json.load(f)
+
+    # --- Determine feature dimension dynamically ---
+    dim = cfg.get("feature_dim")
+    assert dim is not None, "Feature dimension must be specified in the config file."
+    feature_cols = clinical_df.columns.tolist()[-dim:]
+    target_cols = ["time", "event"]
+    if "time" not in clinical_df.columns or "event" not in clinical_df.columns:
+        # Prepare time and event columns if not present
+        time, event = prepare_time_event_columns(clinical_df)
+        clinical_df["time"] = time.values
+        clinical_df["event"] = event.values
+
+    limit_train_batches: Optional[int] = cfg.get("limit_train_batches", None)
+    limit_val_batches: Optional[int] = cfg.get("limit_val_batches", None)
+    
+    # --- Create datasets ---
+    train_df = clinical_df[clinical_df[id_col].isin(split_dict["train"])]
+    val_df   = clinical_df[clinical_df[id_col].isin(split_dict["val"])]
+
+    print(f"Training on {len(train_df)} samples, validating on {len(val_df)} samples.")
+    print(f"Events in training set: {train_df['event'].sum()} / {len(train_df)}")
+    print(f"Events in validation set: {val_df['event'].sum()} / {len(val_df)}")
+
+    # Create torch datasets from the DataFrame
+    # Can use a simple TensorDataset
+    def _df_to_dataset(df) -> torch.utils.data.Dataset:
+        features = torch.from_numpy(df[feature_cols].values).to(torch.float32)
+        targets = torch.from_numpy(df[target_cols].values).to(torch.float32)
+        dataset = torch.utils.data.TensorDataset(features, targets)
+        return dataset
+
+    train_set = _df_to_dataset(train_df)
+    val_set   = _df_to_dataset(val_df)
+
+    # ---------------- DataLoader ---------------- #
+    train_loader = DataLoader(
+        train_set, batch_size=cfg["batch_size"],
+        shuffle=True, num_workers=cfg["num_workers"],
+    )
+    val_loader = DataLoader(
+        val_set, batch_size=cfg["batch_size"],
+        shuffle=False, num_workers=cfg["num_workers"],
+    )
+
+    # ---------------- model ---------------- #
+    model_name, net = get_model(cfg["aggregator"], dim, rank=rank, topk_corr=cfg.get("topk_corr", 256))
+
+    opt, scaler = (
+        torch.optim.Adam(net.parameters(), lr=float(cfg["learning_rate"]),
+                         weight_decay=float(cfg["weight_decay"])),
+        torch.amp.GradScaler(device),
+    )
+
+    # ---------------- W&B (rank‑0 only) ---------------- #
+    if rank == 0 and cfg["wandb"]["mode"] != "disabled":
+        wandb.init(project=cfg["wandb"]["project"],
+                   name   =cfg["wandb"]["run_name"],
+                   mode   =cfg["wandb"]["mode"],
+                   config =cfg)
+        if cfg["wandb"].get("log_grads", False):
+            wandb.watch(net, log_freq=100)
+
+    # ---------------- epochs ---------------- #
+    for epoch in range(cfg["epochs"]):
+        net.train()
+        net.to(device)
+        epoch_loss = 0.0  # Initialize for each epoch
+
+        bar = tqdm(train_loader, disable=rank != 0,
+                   desc=f"Epoch {epoch:02d}", ncols=100)
+        
+        # --- TRAINING LOOP ---
+        batch_num = 0
+        for feats, targets in bar:
+            if limit_train_batches is not None and batch_num >= limit_train_batches:
+                break
+            batch_num += 1
+            t, e = targets[:, 0], targets[:, 1]
+            # feats, t, e = feats.cuda(rank), t.cuda(rank), e.cuda(rank)
+            feats, t, e = feats.to(device), t.to(device), e.to(device)
+            opt.zero_grad()
+            with torch.amp.autocast(device_type=device.type, enabled=False):
+                mini_batches = cfg.get("mini_batches", 1)
+                if mini_batches > 1:
+                    # Split the batch into mini-batches
+                    batch_size = feats.size(0)
+                    # Use numpy to split the batch into mini-batches
+                    index = np.arange(batch_size)
+                    mini_batch_indexes = np.array_split(index, mini_batches)
+                    losses = []
+                    for cur_mini_batch_indexes in mini_batch_indexes:
+                        mini_feats = feats[cur_mini_batch_indexes]
+                        mini_t = t[cur_mini_batch_indexes]
+                        mini_e = e[cur_mini_batch_indexes]
+                        preds = net(mini_feats)
+                        loss = cox_loss(preds, mini_t, mini_e)
+                        losses.append(loss)
+                    loss = torch.stack(losses).mean()
+                else:
+                    preds = net(feats)
+                    loss = cox_loss(preds, t, e)
+
+            epoch_loss += loss.item()
+            scaler.scale(loss).backward()
+            scaler.unscale_(opt)
+            torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
+            scaler.step(opt)
+            scaler.update()
+
+            if rank == 0:
+                bar.set_postfix(loss=loss.item())
+
+        # --- VALIDATION & LOGGING ---
+        if rank == 0:
+            net.eval()
+
+            R, T, E = [], [], []
+            batch_num = 0
+            with torch.no_grad():
+                for feats, targets in tqdm(val_loader, desc="Val", ncols=100):
+                    if limit_val_batches is not None and batch_num >= limit_val_batches:
+                        break
+                    batch_num += 1
+                    r = net(feats).cpu()
+                    t = targets[:, 0].cpu()
+                    e = targets[:, 1].cpu()
+                    R.append(r); T.append(t); E.append(e)
+
+            if batch_num > 0:
+                T = np.concatenate(T); E = np.concatenate(E); R = np.concatenate(R).squeeze(-1)
+                auc, ci = calculate_auc_ci(T, E, R)
+
+                print(f"Epoch {epoch:03d} • CI={ci:.3f} • tAUC={auc:.3f}")
+
+                if cfg["wandb"]["mode"] != "disabled":
+                    avg_epoch_loss = epoch_loss / len(train_loader)
+                    wandb.log({
+                        "train/epoch_loss": avg_epoch_loss,
+                        "val/ci": ci,
+                        "val/auc": auc,
+                        "epoch": epoch
+                    })
+            else:
+                print(f"Epoch {epoch:03d} • No validation set provided.")
+            
+            net.train()
+
+        # --- Save model checkpoint (rank‑0 only) ---
+        if rank == 0 and cfg.get("save_checkpoints", False):
+            save_dir = pathlib.Path(cfg.get("save_dir", "results"))
+            save_dir.mkdir(parents=True, exist_ok=True)
+            save_path = save_dir / f"{model_name}_epoch_{epoch:03d}.pth"
+            torch.save({
+                "model_name": model_name,
+                "dim": dim,
+                "model_state_dict": net.state_dict(),
+                "optimizer_state_dict": opt.state_dict(),
+                "scaler_state_dict": scaler.state_dict(),
+                "epoch": epoch,
+                "config": cfg
+            }, save_path)
+            print(f"Model saved to {save_path}")
+
+    if rank == 0 and cfg["wandb"]["mode"] != "disabled":
+        wandb.finish()
+
+
+# ---------------------------------------------------------------- main
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--config", required=True)
+    parser.add_argument("--local_rank",  type=int, default=0,
+                        help="Rank of the process on the node")
+    # This is for backward compatibility with some launchers.
+    parser.add_argument("--local-rank", type=int, dest="local_rank",
+                        help=argparse.SUPPRESS)
+    opts, _ = parser.parse_known_args()
+
+    cfg = yaml.safe_load(open(opts.config))
+    # world = len(cfg["gpus"])
+
+    run_worker(cfg)

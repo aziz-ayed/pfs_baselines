@@ -25,7 +25,10 @@ def _path_to_pid(path: Path) -> str:
     Extract patient ID from the file path.
     Assumes the patient ID is the first three parts of the filename separated by dashes.
     """
-    return "-".join(path.name.split("-")[:3])
+    if "TCGA" in path.name:
+        return "-".join(path.name.split("-")[:3])
+    else:
+        return os.path.splitext(path.name)[0]  # For non-TCGA paths, use the filename without extension
 
 def calculate_auc_ci(event_times: np.ndarray, event_indicators: np.ndarray, risk_scores: np.ndarray):
     """
@@ -104,9 +107,10 @@ def collect_scores(checkpoint_path: str, embed_paths: List[Path], clinical_csv: 
             "risk_score": risk_scores
         })
 
-        clinical_table = pd.read_csv(cfg["clinical_csv"])
         scores_table["patient_id"] = scores_table["embed_path"].apply(lambda x: _path_to_pid(Path(x)))
-        scores_table = scores_table.merge(clinical_table, on="patient_id", how="left")
+        if cfg["clinical_csv"]:
+            clinical_table = pd.read_csv(cfg["clinical_csv"])
+            scores_table = scores_table.merge(clinical_table, on="patient_id", how="left")
 
         # Create directory if it does not exist
         score_dir = pathlib.Path(score_path).parent
@@ -248,9 +252,10 @@ def main():
         "READ": "Colon",
         "COAD": "Colon",
     }
-    scores_table["cancer_type"] = scores_table["project_id"].apply(
-        lambda x: cancer_types.get(x.split("-")[-1], "Other")
-    )
+    if "project_id" in scores_table.columns and "cancer_type" not in scores_table.columns:
+        scores_table["cancer_type"] = scores_table["project_id"].apply(
+            lambda x: cancer_types.get(x.split("-")[-1], "Other")
+        )
 
     # Overall performance metrics
     auc, ci = calculate_auc_ci(scores_table["time"].values, scores_table["event"], scores_table["risk_score"].values)
@@ -260,7 +265,7 @@ def main():
     stratify_by = ["cancer_type"]
     for col in stratify_by:
         if col not in scores_table.columns:
-            raise ValueError(f"Column '{col}' not found in the scores table.")
+            continue
         print(f"Stratified by {col}:")
         for value, group in scores_table.groupby(col):
             N = len(group)
@@ -271,7 +276,7 @@ def main():
     print(f"AUCs at different time points:\n{aucs_timepoints}")
 
     plots_path = eval_cfg.get("plots_path", "evaluation_plots.pdf")
-    if plots_path:
+    if plots_path and "cancer_type" in scores_table.columns:
         import seaborn as sns
         import matplotlib.pyplot as plt
         from matplotlib.backends.backend_pdf import PdfPages
