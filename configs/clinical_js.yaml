@@ -6,7 +6,17 @@
 feature_dim: 57
 aggregator: "Passthrough"       # MeanPool | MaxPool | AttnMIL | transmil
 batch_size: 128                # slides per GPU
-seed: 1
+seeds:
+  - 0
+  - 1
+  - 2
+  - 3
+  - 4
+  - 5
+  - 6
+  - 7
+  - 8
+  - 9
 limit_val_batches: null
 mini_batches: 1         # Split each batch into `mini_batches` before calculating loss. Used to save memory for large models.
 epochs: 100

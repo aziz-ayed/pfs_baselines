@@ -360,12 +360,18 @@ if __name__ == "__main__":
 
     # Fill in variables from yaml config
     cfg = yaml.safe_load(open(opts.config))
-    var_keys = ["seed", "split"]
-    for vk in var_keys:
-        if vk not in cfg and vk in cfg["eval"]:
-            cfg[vk] = cfg["eval"][vk]
-    fill_in_yaml_variables_recursive(cfg)
-    fill_in_yaml_variables_recursive(cfg["eval"], cfg)
-    pprint.pprint(cfg)
+    seeds = list(cfg.get("seeds", [1234]))
+    if isinstance(seeds, int):
+        seeds = [seeds]
 
-    run_worker(cfg)
+    for seed in seeds:
+        var_keys = ["seed", "split"]
+        cfg["seed"] = seed
+        for vk in var_keys:
+            if vk not in cfg and vk in cfg["eval"]:
+                cfg[vk] = cfg["eval"][vk]
+        fill_in_yaml_variables_recursive(cfg)
+        fill_in_yaml_variables_recursive(cfg["eval"], cfg)
+        pprint.pprint(cfg)
+
+        run_worker(cfg)
