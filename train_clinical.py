@@ -371,7 +371,7 @@ def run_worker(cfg: dict, rank: int=0):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
-    parser.add_argument("--max_workers", type=int, default=4,)
+    parser.add_argument("--max_workers", type=int, default=0,)
     parser.add_argument("--local_rank",  type=int, default=0,
                         help="Rank of the process on the node")
     # This is for backward compatibility with some launchers.

@@ -4,7 +4,7 @@
 #feature_dir: "/storage/azizayed/features_uni_v2"
 #feature_dir: "/data/rbg/users/azizayed/chemistry/trident/outputs_tcga/20x_256px_0px_overlap/features_uni_v2"
 feature_dim: 57
-aggregator: "AttnMILNew"       # MeanPool | MaxPool | AttnMIL | transmil | Passthrough | MLP | AttnMILNew
+aggregator: "MLP"       # MeanPool | MaxPool | AttnMIL | transmil | Passthrough | MLP | AttnMILNew
 batch_size: 128                # slides per GPU
 seeds:
   - 0
