@@ -30,7 +30,7 @@ num_workers: 4
 clinical_csv: "data/clinical_model_features.csv"
 wandb:
   project: tcga_survival_baselines
-  run_name: passthrough_clinical_all
+  run_name: passthrough_clinical_all_seed{seed}
   mode: online          # "online" | "offline" | "disabled"
   log_grads: true      # true = wandb.watch(model) on rank 0
 log_every: 50

@@ -99,6 +99,9 @@ def fill_in_yaml_variables_recursive(cfg, source=None):
                 pass
     return cfg
 
+def _get_dts():
+    return f"[{pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}]"
+
 def run_worker(cfg: dict):
     clinical_csv = cfg["clinical_csv"]
     clinical_df = pd.read_csv(clinical_csv)
@@ -136,12 +139,21 @@ def run_worker(cfg: dict):
                 "test": split_df[split_df["split"] == "test"][_id_col].tolist(),
             }
 
+    def _value_happens(inval):
+        if pd.isna(inval):
+            return False
+        if isinstance(inval, str):
+            return inval.lower() in {"yes", "true", "1"}
+        else:
+            return inval >= 0
+
     def _is_progression(row):
-        prog_days = row["days_to_progression"]
-        rec_days = row["days_to_recurrence"]
+        prog_days = _value_happens(row["days_to_progression"])
+        rec_days = _value_happens(row["days_to_recurrence"])
         # is_yes = row["progression_or_recurrence"].lower() == "yes"
-        is_yes = str(row["progression_recurrence_event"]).lower() == "yes"
-        bool_prog = is_yes or (not pd.isna(prog_days) and prog_days > 0) or (not pd.isna(rec_days) and rec_days > 0)
+        is_yes = _value_happens(row["progression_recurrence_event"])
+        is_dead = _value_happens(row["days_to_death"])
+        bool_prog = prog_days or rec_days or is_yes or is_dead
         return 1 if bool_prog else 0
 
     if "max_follow_up_days" not in clinical_df.columns:
@@ -231,6 +243,9 @@ def run_worker(cfg: dict):
         if cfg["wandb"].get("log_grads", False):
             wandb.watch(net, log_freq=100)
 
+    save_dir = pathlib.Path(cfg.get("save_dir", "results"))
+    save_dir.mkdir(parents=True, exist_ok=True)
+
     # ---------------- epochs ---------------- #
     for epoch in range(cfg["epochs"]):
         net.train()
@@ -311,16 +326,22 @@ def run_worker(cfg: dict):
                     continue
                 auc, ci = calculate_auc_ci(T, E, R)
 
-                print(f"Epoch {epoch:03d} • CI={ci:.3f} • tAUC={auc:.3f}")
-
-                if cfg["wandb"]["mode"] != "disabled":
-                    avg_epoch_loss = epoch_loss / len(train_loader)
-                    wandb.log({
+                avg_epoch_loss = epoch_loss / len(train_loader)
+                print(f"{_get_dts()} Epoch {epoch:03d} • CI={ci:.3f} • tAUC={auc:.3f} Loss: {avg_epoch_loss:0.3f} Seed {cfg['seed']}")
+                perf_dict = {
                         "train/epoch_loss": avg_epoch_loss,
                         "val/ci": ci,
                         "val/auc": auc,
                         "epoch": epoch
-                    })
+                    }
+                # Save performance metrics to file
+                perf_file = save_dir / f"{model_name}_epoch_{epoch:03d}_perf.json"
+                with open(perf_file, "w") as f:
+                    json.dump(perf_dict, f, indent=2)
+
+
+                if cfg["wandb"]["mode"] != "disabled":
+                    wandb.log(perf_dict)
             else:
                 print(f"Epoch {epoch:03d} • No validation set provided.")
             
@@ -328,8 +349,6 @@ def run_worker(cfg: dict):
 
         # --- Save model checkpoint (rank‑0 only) ---
         if rank == 0 and cfg.get("save_checkpoints", False):
-            save_dir = pathlib.Path(cfg.get("save_dir", "results"))
-            save_dir.mkdir(parents=True, exist_ok=True)
             save_path = save_dir / f"{model_name}_epoch_{epoch:03d}.pth"
             torch.save({
                 "model_name": model_name,
@@ -341,7 +360,7 @@ def run_worker(cfg: dict):
                 "epoch": epoch,
                 "config": cfg
             }, save_path)
-            print(f"Model saved to {save_path}")
+            print(f"{_get_dts()}  Model saved to {save_path}")
 
     if rank == 0 and cfg["wandb"]["mode"] != "disabled":
         wandb.finish()
@@ -372,6 +391,8 @@ if __name__ == "__main__":
                 cfg[vk] = cfg["eval"][vk]
         fill_in_yaml_variables_recursive(cfg)
         fill_in_yaml_variables_recursive(cfg["eval"], cfg)
+
+        pprint.pprint(f"{_get_dts()} Config for seed {seed}:")
         pprint.pprint(cfg)
 
         run_worker(cfg)
