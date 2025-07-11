@@ -79,7 +79,7 @@ class AttnMILNewCox(nn.Module):
         x = self.feature_extractor(x)  # Shape remains (B, N, d)
         att = self.w(torch.tanh(self.V(x)) * torch.sigmoid(self.U(x)))
         att = torch.softmax(att, dim=1)
-        slide_vec = (att * x).sum(dim=1)
+        slide_vec = (att * x)
         if len(slide_vec.shape) == 3:
             slide_vec = slide_vec.sum(dim=1)  # (B, d)
         return self.beta(slide_vec)
