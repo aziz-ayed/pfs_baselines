@@ -5,6 +5,7 @@ import json
 import os
 import h5py
 import pathlib
+import random
 from datetime import timedelta
 from typing import Optional, Tuple
 
@@ -65,6 +66,25 @@ def prepare_time_event_columns(clinical_df: pd.DataFrame):
     event = clinical_df["progression_recurrence_event"]
     return time, event
 
+def seed_torch(device, seed=1234):
+    os.environ["PYTHONHASHSEED"] = str(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if device.type == "cuda":
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)  # if you are using multi-GPU.
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+
+# Create torch datasets from the DataFrame
+# Can use a simple TensorDataset
+def df_to_dataset(df, feature_cols, target_cols) -> torch.utils.data.Dataset:
+    features = torch.from_numpy(df[feature_cols].values).to(torch.float32)
+    targets = torch.from_numpy(df[target_cols].values).to(torch.float32)
+    dataset = torch.utils.data.TensorDataset(features, targets)
+    return dataset
+
 def run_worker(cfg: dict):
 
     clinical_csv = cfg["clinical_csv"]
@@ -74,7 +94,26 @@ def run_worker(cfg: dict):
     device = torch.device("cpu")
     rank = 0
 
-    # Hack
+    # --- Determine feature dimension dynamically ---
+    dim = cfg.get("feature_dim")
+    assert dim is not None, "Feature dimension must be specified in the config file."
+    feature_cols = clinical_df.columns.tolist()[-dim:]
+
+    # feature_categories = ['age_at_index', 'gender', 'race', 'ethnicity', 'ajcc_pathologic_n', 'ajcc_pathologic_m', 'ajcc_pathologic_t', 'laterality', 'morphology']
+    # exclude_categories = ["ajcc_pathologic_n", "ajcc_pathologic_m", "ajcc_pathologic_t"]
+    exclude_categories = []
+
+    if "seed" in cfg:
+        seed = cfg["seed"]
+        seed_torch(device, seed)
+
+    split_path: Optional[str] = cfg.get("split_file", None)
+    assert os.path.exists(split_path), f"Split file {split_path} does not exist."
+    if split_path:
+        with open(split_path, "r") as f:
+            split_dict = json.load(f)
+
+    # Hacks
     if "progression_or_recurrence" in clinical_df.columns:
         # Rename columns to match expected names
         clinical_df.rename(columns={
@@ -84,31 +123,36 @@ def run_worker(cfg: dict):
             lambda x: 1 if str(x).lower() == "Yes".lower() else 0
         )
     if "max_follow_up_days" not in clinical_df.columns:
-        clinical_df["max_follow_up_days"] = clinical_df[["days_to_follow_up", "days_to_last_follow_up"]].max(axis=1)
+        clinical_df["max_follow_up_days"] = clinical_df[["days_to_follow_up", "days_to_last_follow_up", "days_to_death"]].max(axis=1)
     if "days_to_progression_recurrence" not in clinical_df.columns:
         event_columns = ["days_to_progression", "days_to_recurrence", "days_to_follow_up", "days_to_last_follow_up", "days_to_death"]
         clinical_df["days_to_progression_recurrence"] = clinical_df[event_columns].min(axis=1)
-    keep_rows = pd.notna(clinical_df["days_to_progression_recurrence"]) & pd.notna(clinical_df["progression_recurrence_event"])
-    print(f"Keeping {keep_rows.sum()} rows out of {len(clinical_df)} based on 'days_to_progression_recurrence' and 'progression_recurrence_event'.")
-    clinical_df = clinical_df[keep_rows].reset_index(drop=True)
 
-
-    split_path: Optional[str] = cfg.get("split_file", None)
-    assert os.path.exists(split_path), f"Split file {split_path} does not exist."
-    if split_path:
-        with open(split_path, "r") as f:
-            split_dict = json.load(f)
-
-    # --- Determine feature dimension dynamically ---
-    dim = cfg.get("feature_dim")
-    assert dim is not None, "Feature dimension must be specified in the config file."
-    feature_cols = clinical_df.columns.tolist()[-dim:]
     target_cols = ["time", "event"]
     if "time" not in clinical_df.columns or "event" not in clinical_df.columns:
         # Prepare time and event columns if not present
         time, event = prepare_time_event_columns(clinical_df)
         clinical_df["time"] = time.values
         clinical_df["event"] = event.values
+
+    # Create column to label split
+    if id_col in clinical_df.columns:
+        for label in ["train", "val"]:
+            cur_pids = split_dict[label]
+            clinical_df.loc[clinical_df[id_col].isin(cur_pids), "split"] = label
+
+    keep_rows = pd.notna(clinical_df["days_to_progression_recurrence"]) & pd.notna(clinical_df["progression_recurrence_event"])
+    print(f"Keeping {keep_rows.sum()} rows out of {len(clinical_df)} based on 'days_to_progression_recurrence' and 'progression_recurrence_event'.")
+    clinical_df = clinical_df[keep_rows].reset_index(drop=True)
+
+    clinical_df.to_csv(clinical_csv.replace(".csv", "_mod.csv"), index=False)
+
+    if exclude_categories:
+        keep_feature_cols = [col for col in feature_cols if "_".join(col.split("_")[0:-1]) not in exclude_categories]
+        print(f"Keeping {len(keep_feature_cols)} feature columns out of {len(feature_cols)} based on exclusion criteria.")
+        feature_cols = keep_feature_cols
+
+    dim = len(feature_cols)
 
     limit_train_batches: Optional[int] = cfg.get("limit_train_batches", None)
     limit_val_batches: Optional[int] = cfg.get("limit_val_batches", None)
@@ -121,16 +165,11 @@ def run_worker(cfg: dict):
     print(f"Events in training set: {train_df['event'].sum()} / {len(train_df)}")
     print(f"Events in validation set: {val_df['event'].sum()} / {len(val_df)}")
 
-    # Create torch datasets from the DataFrame
-    # Can use a simple TensorDataset
-    def _df_to_dataset(df) -> torch.utils.data.Dataset:
-        features = torch.from_numpy(df[feature_cols].values).to(torch.float32)
-        targets = torch.from_numpy(df[target_cols].values).to(torch.float32)
-        dataset = torch.utils.data.TensorDataset(features, targets)
-        return dataset
+    train_set = df_to_dataset(train_df, feature_cols, target_cols)
+    val_set   = df_to_dataset(val_df, feature_cols, target_cols)
 
-    train_set = _df_to_dataset(train_df)
-    val_set   = _df_to_dataset(val_df)
+    train_val_pid_overlap = set(train_df[id_col]).intersection(set(val_df[id_col]))
+    print(f"Patient ID overlap between train and val sets: {len(train_val_pid_overlap)}")
 
     # ---------------- DataLoader ---------------- #
     train_loader = DataLoader(
@@ -263,6 +302,7 @@ def run_worker(cfg: dict):
             torch.save({
                 "model_name": model_name,
                 "dim": dim,
+                "feature_cols": feature_cols,
                 "model_state_dict": net.state_dict(),
                 "optimizer_state_dict": opt.state_dict(),
                 "scaler_state_dict": scaler.state_dict(),

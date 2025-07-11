@@ -5,7 +5,8 @@
 #feature_dir: "/data/rbg/users/azizayed/chemistry/trident/outputs_tcga/20x_256px_0px_overlap/features_uni_v2"
 feature_dim: 57
 aggregator: "Passthrough"       # MeanPool | MaxPool | AttnMIL | transmil
-batch_size: 64                # slides per GPU
+batch_size: 128                # slides per GPU
+seed: 12345
 limit_val_batches: null
 mini_batches: 1         # Split each batch into `mini_batches` before calculating loss. Used to save memory for large models.
 epochs: 10
@@ -19,7 +20,7 @@ num_workers: 4
 clinical_csv: "data/clinical_model_features.csv"
 wandb:
   project: tcga_survival_baselines
-  run_name: passthrough_clinical
+  run_name: passthrough_clinical_excl_pathology
   mode: online          # "online" | "offline" | "disabled"
   log_grads: true      # true = wandb.watch(model) on rank 0
 log_every: 50
@@ -28,7 +29,7 @@ persistent_workers: true
 split_file: "data/splits.json"
 eval:
   limit: null
-  split: train # train | val | test
-  score_path: "results/tcga/clinical_evaluation_scores_train.csv"
-  plots_path: "results/tcga/clinical_evaluation_plots_train.pdf"
-  overwrite: false
+  split: val # train | val | test
+  score_path: "results/tcga/clinical_evaluation_scores_val.csv"
+  plots_path: "results/tcga/clinical_evaluation_plots_val.pdf"
+  overwrite: true
