@@ -21,6 +21,19 @@ class PassthroughCox(nn.Module):
     def forward(self, x: Tensor) -> Tensor:  # x: (B, d)
         return self.beta(x) # (B,)
 
+class MLPCox(nn.Module):
+    """Very basic linear model."""
+
+    def __init__(self, d: int, h: int = 256):
+        super().__init__()
+        layers = [nn.Linear(d, h),
+                  nn.ReLU(),
+                  nn.Linear(h, 1, bias=True)]
+        self.beta = nn.Sequential(*layers)
+
+    def forward(self, x: Tensor) -> Tensor:  # x: (B, d)
+        return self.beta(x) # (B,)
+
 class MeanPoolCox(nn.Module):
     """Mean‑pooling MIL baseline followed by a linear Cox head."""
 
@@ -44,6 +57,32 @@ class MaxPoolCox(nn.Module):
         slide_vec = x.max(dim=1).values      # (B, d)
         return self.beta(slide_vec).squeeze(-1)
 
+class AttnMILNewCox(nn.Module):
+    def __init__(self, d: int, h: int = 256, dropout: float = 0.25):
+        super().__init__()
+
+        # Add a small MLP to transform features first
+        self.feature_extractor = nn.Sequential(
+            nn.Linear(d, d),
+            nn.ReLU(),
+            nn.Dropout(p=dropout),
+        )
+
+        self.V = nn.Linear(d, h)  # Use d, not d*2 or something else
+        self.U = nn.Linear(d, h)
+        self.w = nn.Linear(h, 1)
+        self.beta = nn.Linear(d, 1, bias=False)
+
+    def forward(self, x: Tensor) -> Tensor:  # x: (B, N, d)
+
+        # Pass features through the extractor first
+        x = self.feature_extractor(x)  # Shape remains (B, N, d)
+        att = self.w(torch.tanh(self.V(x)) * torch.sigmoid(self.U(x)))
+        att = torch.softmax(att, dim=1)
+        slide_vec = (att * x).sum(dim=1)
+        if len(slide_vec.shape) == 3:
+            slide_vec = slide_vec.sum(dim=1)  # (B, d)
+        return self.beta(slide_vec)
 
 class AttnMILCox(nn.Module):
     """Gated‑attention MIL (Ilse et al., 2018) with a Cox head."""
@@ -58,8 +97,10 @@ class AttnMILCox(nn.Module):
     def forward(self, x: Tensor) -> Tensor:  # x: (B, N, d)
         att = self.w(torch.tanh(self.V(x)) * torch.sigmoid(self.U(x)))  # (B,N,1)
         att = torch.softmax(att, dim=1)
-        slide_vec = (att * x).sum(dim=1)     # (B, d)
-        return self.beta(slide_vec).squeeze(-1)
+        slide_vec = (att * x)
+        if len(slide_vec.shape) == 3:
+            slide_vec = slide_vec.sum(dim=1)  # (B, d)
+        return self.beta(slide_vec)
 
 # -----------------------------------------------------------------------------
 # Pyramid Positional Encoding Generator (PPEG) --------------------------------

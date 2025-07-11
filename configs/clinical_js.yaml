@@ -4,7 +4,7 @@
 #feature_dir: "/storage/azizayed/features_uni_v2"
 #feature_dir: "/data/rbg/users/azizayed/chemistry/trident/outputs_tcga/20x_256px_0px_overlap/features_uni_v2"
 feature_dim: 57
-aggregator: "Passthrough"       # MeanPool | MaxPool | AttnMIL | transmil
+aggregator: "MLP"       # MeanPool | MaxPool | AttnMIL | transmil | Passthrough | MLP | AttnMILNew
 batch_size: 128                # slides per GPU
 seeds:
   - 0
@@ -24,13 +24,13 @@ learning_rate: 5e-5
 weight_decay: 1e-5
 topk_corr: 256               # for TransMIL
 save_checkpoints: true
-save_dir: "results/tcga/{seed}/clinical_js"
+save_dir: "results/tcga/clinical_js/{aggregator}/{seed}"
 gpus: [0,1,2,3,4,5,6]
 num_workers: 4
 clinical_csv: "data/clinical_model_features.csv"
 wandb:
   project: tcga_survival_baselines
-  run_name: passthrough_clinical_all_seed{seed}
+  run_name: "{aggregator}_clinical_all_seed{seed}"
   mode: online          # "online" | "offline" | "disabled"
   log_grads: true      # true = wandb.watch(model) on rank 0
 log_every: 50
@@ -39,7 +39,7 @@ persistent_workers: true
 split_file: "data/clean_splits.csv"
 eval:
   limit: null
-  split: val # train | val | test
-  score_path: "results/tcga/{seed}/clinical_evaluation_scores_{split}.csv"
-  plots_path: "results/tcga/{seed}/clinical_evaluation_plots_{split}.pdf"
+  split: test # train | val | test
+  score_path: "results/tcga/clinical_js/{aggregator}/{seed}/clinical_evaluation_scores_{split}.csv"
+  plots_path: "results/tcga/clinical_js/{aggregator}/{seed}/clinical_evaluation_plots_{split}.pdf"
   overwrite: true

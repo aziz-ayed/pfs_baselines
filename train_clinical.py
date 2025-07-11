@@ -2,6 +2,7 @@
 
 import argparse, yaml
 import json
+import multiprocessing
 import os
 import h5py
 import pathlib
@@ -20,10 +21,7 @@ from torch.utils.data import DataLoader, DistributedSampler
 from tqdm import tqdm                      # progress bar
 import wandb                              # experiment tracker
 
-from src.dataset import PatchBagDataset
-from src.collate import pad_collate
 from eval import calculate_auc_ci
-from src import models
 from src.models import *
 
 
@@ -102,13 +100,12 @@ def fill_in_yaml_variables_recursive(cfg, source=None):
 def _get_dts():
     return f"[{pd.Timestamp.now().strftime('%Y-%m-%d %H:%M:%S')}]"
 
-def run_worker(cfg: dict):
+def run_worker(cfg: dict, rank: int=0):
     clinical_csv = cfg["clinical_csv"]
     clinical_df = pd.read_csv(clinical_csv)
     id_col = "submitter_id"
     # device = torch.device(f"cuda:{cfg['gpus'][0]}") if torch.cuda.is_available() else torch.device("cpu")
     device = torch.device("cpu")
-    rank = 0
 
     # --- Determine feature dimension dynamically ---
     dim = cfg.get("feature_dim")
@@ -218,15 +215,17 @@ def run_worker(cfg: dict):
     # ---------------- DataLoader ---------------- #
     train_loader = DataLoader(
         train_set, batch_size=cfg["batch_size"],
-        shuffle=True, num_workers=cfg["num_workers"],
+        shuffle=True, num_workers=0,
     )
     val_loader = DataLoader(
         val_set, batch_size=cfg["batch_size"],
-        shuffle=False, num_workers=cfg["num_workers"],
+        shuffle=False, num_workers=0,
     )
 
     # ---------------- model ---------------- #
-    model_name, net = get_model(cfg["aggregator"], dim, rank=rank, topk_corr=cfg.get("topk_corr", 256))
+    model_name, net = get_model(cfg["aggregator"], dim, rank=None, topk_corr=cfg.get("topk_corr", 256))
+    print(f"Model: {model_name} with input dimension {dim}")
+    # print(f"Model: {net}")
 
     opt, scaler = (
         torch.optim.Adam(net.parameters(), lr=float(cfg["learning_rate"]),
@@ -252,12 +251,13 @@ def run_worker(cfg: dict):
         net.to(device)
         epoch_loss = 0.0  # Initialize for each epoch
 
-        bar = tqdm(train_loader, disable=rank != 0,
-                   desc=f"Epoch {epoch:02d}", ncols=100)
+        # bar = tqdm(train_loader, disable=True, desc=f"Epoch {epoch:02d}", ncols=100)
+        bar = None
+        batch_iterator = train_loader
         
         # --- TRAINING LOOP ---
         batch_num = 0
-        for feats, targets in bar:
+        for feats, targets in batch_iterator:
             if limit_train_batches is not None and batch_num >= limit_train_batches:
                 break
             batch_num += 1
@@ -299,7 +299,7 @@ def run_worker(cfg: dict):
             # scaler.step(opt)
             # scaler.update()
 
-            if rank == 0:
+            if bar:
                 bar.set_postfix(loss=loss.item())
 
         # --- VALIDATION & LOGGING ---
@@ -309,7 +309,7 @@ def run_worker(cfg: dict):
             R, T, E = [], [], []
             batch_num = 0
             with torch.no_grad():
-                for feats, targets in tqdm(val_loader, desc="Val", ncols=100):
+                for feats, targets in val_loader:
                     if limit_val_batches is not None and batch_num >= limit_val_batches:
                         break
                     batch_num += 1
@@ -370,29 +370,40 @@ def run_worker(cfg: dict):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", required=True)
+    parser.add_argument("--max_workers", type=int, default=4,)
     parser.add_argument("--local_rank",  type=int, default=0,
                         help="Rank of the process on the node")
     # This is for backward compatibility with some launchers.
     parser.add_argument("--local-rank", type=int, dest="local_rank",
                         help=argparse.SUPPRESS)
     opts, _ = parser.parse_known_args()
+    max_workers = opts.max_workers
 
     # Fill in variables from yaml config
-    cfg = yaml.safe_load(open(opts.config))
-    seeds = list(cfg.get("seeds", [1234]))
+    orig_cfg = yaml.safe_load(open(opts.config))
+    seeds = list(orig_cfg.get("seeds", [1234]))
     if isinstance(seeds, int):
         seeds = [seeds]
 
+    configs = []
     for seed in seeds:
-        var_keys = ["seed", "split"]
+        var_keys = ["seed", "split", "aggregator"]
+        cfg = orig_cfg.copy()
         cfg["seed"] = seed
         for vk in var_keys:
             if vk not in cfg and vk in cfg["eval"]:
                 cfg[vk] = cfg["eval"][vk]
         fill_in_yaml_variables_recursive(cfg)
-        fill_in_yaml_variables_recursive(cfg["eval"], cfg)
+        sub_keys = ["eval", "wandb"]
+        for sk in sub_keys:
+            if sk in cfg:
+                fill_in_yaml_variables_recursive(cfg[sk], cfg)
 
-        pprint.pprint(f"{_get_dts()} Config for seed {seed}:")
-        pprint.pprint(cfg)
+        configs.append(cfg.copy())
 
-        run_worker(cfg)
+    if max_workers > 1:
+        with multiprocessing.Pool(processes=max_workers) as pool:
+            pool.map(run_worker, configs)
+    else:
+        for cfg in configs:
+            run_worker(cfg)

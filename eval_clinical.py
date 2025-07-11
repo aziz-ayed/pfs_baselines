@@ -216,14 +216,44 @@ def _get_parser():
     parser = argparse.ArgumentParser(description="Evaluate a survival model.")
     parser.add_argument("--config", required=True)
     parser.add_argument("--checkpoint_path", type=str, default=None)
+    parser.add_argument("--seed", type=int, default=1, help="Random seed used during train. Used for paths.")
 
     return parser
+
+
+def fill_in_yaml_variables_recursive(cfg, source=None):
+    if source is None:
+        source = cfg
+    for key, value in cfg.items():
+        if isinstance(value, dict):
+            fill_in_yaml_variables_recursive(value, source)
+        elif isinstance(value, str):
+            try:
+                cfg[key] = value.format(**source)
+            except KeyError:
+                pass
+    return cfg
+
+def prepare_cfg(orig_cfg: dict, seed) -> dict:
+    var_keys = ["seed", "split"]
+    cfg = orig_cfg.copy()
+    cfg["seed"] = seed
+    for vk in var_keys:
+        if vk not in cfg and vk in cfg["eval"]:
+            cfg[vk] = cfg["eval"][vk]
+    fill_in_yaml_variables_recursive(cfg)
+    sub_keys = ["eval", "wandb"]
+    for sk in sub_keys:
+        if sk in cfg:
+            fill_in_yaml_variables_recursive(cfg[sk], cfg)
+    return cfg
 
 def main():
     parser = _get_parser()
     opts, _ = parser.parse_known_args()
 
     cfg = yaml.safe_load(open(opts.config))
+    cfg = prepare_cfg(cfg, opts.seed)
     checkpoint_path = opts.checkpoint_path if hasattr(opts, "checkpoint_path") else cfg.get("checkpoint_path", None)
     assert checkpoint_path is not None, "Checkpoint path must be specified either in command line or config file."
 
@@ -235,6 +265,15 @@ def main():
         train_paths = [Path(p) for p in split_data["train"]]
         val_paths = [Path(p) for p in split_data["val"]]
         saved_dim = split_data.get("dim", None)
+    elif cfg["split_file"].endswith(".csv"):
+        split_df = pd.read_csv(cfg["split_file"])
+        _id_col = split_df.columns[0] if split_df.columns[0] in {"patient_id", "submitter_id"} else None
+        assert _id_col is not None, "Split file must contain a column for patient IDs."
+        split_dict = {
+            "train": split_df[split_df["split"] == "train"][_id_col].tolist(),
+            "val": split_df[split_df["split"].isin({"val", "dev", "validation"})][_id_col].tolist(),
+            "test": split_df[split_df["split"] == "test"][_id_col].tolist(),
+        }
     else:
         raise ValueError(f"Unsupported split file format: {cfg['split_file']}")
 
@@ -258,7 +297,7 @@ def main():
 
     # Overall performance metrics
     auc, ci = calculate_auc_ci(scores_table["time"].values, scores_table["event"], scores_table["risk_score"].values)
-    print(f"Model {checkpoint_path} overall evaluation results:\nAUC: {auc:.3f}, CI: {ci:.3f} (N={len(scores_table)})")
+    print(f"Model {checkpoint_path} overall evaluation results on split {split} :\nAUC: {auc:.3f}, CI: {ci:.3f} (N={len(scores_table)})")
     print(f"Events: {scores_table['event'].sum().astype(int)} / {len(scores_table)} ({scores_table['event'].mean() * 100:.1f}%)")
 
     stratify_by = ["cancer_type"]
