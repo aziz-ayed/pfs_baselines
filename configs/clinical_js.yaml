@@ -8,7 +8,7 @@ aggregator: "Passthrough"       # MeanPool | MaxPool | AttnMIL | transmil
 batch_size: 32                # slides per GPU
 limit_val_batches: null
 mini_batches: 1         # Split each batch into `mini_batches` before calculating loss. Used to save memory for large models.
-epochs: 50
+epochs: 10
 learning_rate: 5e-5
 weight_decay: 1e-5
 topk_corr: 256               # for TransMIL

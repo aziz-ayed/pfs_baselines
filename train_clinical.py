@@ -27,10 +27,12 @@ from src.models import *
 
 # --------------------------------------------------------------------- utils
 
-def cox_loss(risk, t, e):
+def cox_loss(risk, t, e, eps=1e-8, clamp_min=-10.0, clamp_max=10.0):
     idx = torch.argsort(t, descending=True)
+    risk_clamped = risk[idx].clamp(min=clamp_min, max=clamp_max)
     hr  = torch.exp(risk[idx])
-    return (-(risk[idx] - torch.log(torch.cumsum(hr, 0))) * e[idx]).mean()
+    cumsum_hr = torch.cumsum(hr, 0).clamp(min=eps)
+    return (-(risk_clamped - torch.log(cumsum_hr)) * e[idx]).mean()
 
 
 def get_model(aggregator: str, dim: int, rank: int=None, topk_corr: int=256) -> Tuple[str, nn.Module]:
@@ -198,12 +200,19 @@ def run_worker(cfg: dict):
                     preds = net(feats)
                     loss = cox_loss(preds, t, e)
 
+            if torch.isnan(loss):
+                print(f"feats: {feats}")
+                print(f"targets: {targets}")
+                exit(0)
+
             epoch_loss += loss.item()
-            scaler.scale(loss).backward()
-            scaler.unscale_(opt)
+            # scaler.scale(loss).backward()
+            # scaler.unscale_(opt)
+            loss.backward()
             torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=1.0)
-            scaler.step(opt)
-            scaler.update()
+            opt.step()
+            # scaler.step(opt)
+            # scaler.update()
 
             if rank == 0:
                 bar.set_postfix(loss=loss.item())
@@ -226,6 +235,10 @@ def run_worker(cfg: dict):
 
             if batch_num > 0:
                 T = np.concatenate(T); E = np.concatenate(E); R = np.concatenate(R).squeeze(-1)
+                count_nans = np.isnan(R).sum()
+                if count_nans:
+                    print(f"Warning: {count_nans} / {len(R)} nan values found in predictions. Skipping validation.")
+                    continue
                 auc, ci = calculate_auc_ci(T, E, R)
 
                 print(f"Epoch {epoch:03d} • CI={ci:.3f} • tAUC={auc:.3f}")
