@@ -1,4 +1,5 @@
 import argparse
+import copy
 import json
 import os
 import pathlib
@@ -187,8 +188,8 @@ def calculate_aucs_timepoints(score_table: pd.DataFrame):
         {"label": "6m", "days": 180},
         {"label": "12m", "days": 365},
         {"label": "18m", "days": 540},
-        {"label": "24m", "days": 730},
-        {"label": "10y", "days": 3650},
+        # {"label": "24m", "days": 730},
+        # {"label": "10y", "days": 3650},
     ]
 
     for th in time_horizons:
@@ -204,8 +205,8 @@ def calculate_aucs_timepoints(score_table: pd.DataFrame):
         cur_time_prc = sklearn.metrics.average_precision_score(positive_within_window, risk_score)
         th[f"auc"] = cur_time_auc
         th[f"prc"] = cur_time_prc
-        th[f"n"] = len(risk_score)
         th[f"events"] = positive_within_window.sum()
+        th[f"n"] = len(risk_score)
 
     auc_table = pd.DataFrame(time_horizons)
 
@@ -221,31 +222,16 @@ def _get_parser():
     return parser
 
 
-def fill_in_yaml_variables_recursive(cfg, source=None):
-    if source is None:
-        source = cfg
-    for key, value in cfg.items():
-        if isinstance(value, dict):
-            fill_in_yaml_variables_recursive(value, source)
-        elif isinstance(value, str):
-            try:
-                cfg[key] = value.format(**source)
-            except KeyError:
-                pass
-    return cfg
+def prepare_cfg(orig_cfg: dict, seed: int = None):
+    cfg = copy.deepcopy(orig_cfg)
+    if seed is not None:
+        cfg["seed"] = seed
 
-def prepare_cfg(orig_cfg: dict, seed) -> dict:
-    var_keys = ["seed", "split"]
-    cfg = orig_cfg.copy()
-    cfg["seed"] = seed
-    for vk in var_keys:
-        if vk not in cfg and vk in cfg["eval"]:
-            cfg[vk] = cfg["eval"][vk]
-    fill_in_yaml_variables_recursive(cfg)
-    sub_keys = ["eval", "wandb"]
-    for sk in sub_keys:
-        if sk in cfg:
-            fill_in_yaml_variables_recursive(cfg[sk], cfg)
+    cfg["wandb"]["run_name"] = cfg["wandb"]["run_name"].format(**cfg)
+    cfg["save_dir"] = cfg["save_dir"].format(**cfg)
+    cfg["eval"]["score_path"] = cfg["eval"]["score_path"].format(**{**cfg, **cfg["eval"]})
+    cfg["eval"]["plots_path"] = cfg["eval"]["plots_path"].format(**{**cfg, **cfg["eval"]})
+
     return cfg
 
 def main():

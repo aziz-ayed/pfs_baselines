@@ -24,13 +24,13 @@ learning_rate: 5e-5
 weight_decay: 1e-5
 topk_corr: 256               # for TransMIL
 save_checkpoints: true
-save_dir: "results/tcga/clinical_js/{aggregator}/{seed}"
+save_dir: "results/tcga/demographic/{aggregator}/{seed}"
 gpus: [0,1,2,3,4,5,6]
 num_workers: 4
 clinical_csv: "data/clinical_model_features.csv"
 wandb:
   project: tcga_survival_baselines
-  run_name: "{aggregator}_clinical_all_seed_{seed}"
+  run_name: "{aggregator}_clinical_demographic_seed_{seed}"
   mode: online          # "online" | "offline" | "disabled"
   log_grads: true      # true = wandb.watch(model) on rank 0
 log_every: 50
@@ -40,6 +40,6 @@ split_file: "data/clean_splits.csv"
 eval:
   limit: null
   split: test # train | val | test
-  score_path: "results/tcga/clinical_js/{aggregator}/{seed}/clinical_evaluation_scores_{split}.csv"
-  plots_path: "results/tcga/clinical_js/{aggregator}/{seed}/clinical_evaluation_plots_{split}.pdf"
+  score_path: "results/tcga/demographic/{aggregator}/{seed}/clinical_evaluation_scores_{split}.csv"
+  plots_path: "results/tcga/demographic/{aggregator}/{seed}/clinical_evaluation_plots_{split}.pdf"
   overwrite: true

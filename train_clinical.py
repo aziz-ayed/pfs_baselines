@@ -114,8 +114,8 @@ def run_worker(cfg: dict, rank: int=0):
     feature_cols = clinical_df.columns.tolist()[-dim:]
 
     # feature_categories = ['age_at_index', 'gender', 'race', 'ethnicity', 'ajcc_pathologic_n', 'ajcc_pathologic_m', 'ajcc_pathologic_t', 'laterality', 'morphology']
-    # exclude_categories = ["ajcc_pathologic_n", "ajcc_pathologic_m", "ajcc_pathologic_t"]
-    exclude_categories = []
+    exclude_categories = ['ajcc_pathologic_n', 'ajcc_pathologic_m', 'ajcc_pathologic_t', 'laterality', 'morphology']
+    # exclude_categories = []
 
     if "seed" in cfg:
         seed = cfg["seed"]
@@ -366,6 +366,17 @@ def run_worker(cfg: dict, rank: int=0):
     if rank == 0 and cfg["wandb"]["mode"] != "disabled":
         wandb.finish()
 
+def prepare_cfg(orig_cfg: dict, seed: int=None):
+    cfg = copy.deepcopy(orig_cfg)
+    if seed is not None:
+        cfg["seed"] = seed
+
+    cfg["wandb"]["run_name"] = cfg["wandb"]["run_name"].format(**cfg)
+    cfg["save_dir"] = cfg["save_dir"].format(**cfg)
+    cfg["eval"]["score_path"] = cfg["eval"]["score_path"].format(**{**cfg, **cfg["eval"]})
+    cfg["eval"]["plots_path"] = cfg["eval"]["plots_path"].format(**{**cfg, **cfg["eval"]})
+
+    return cfg
 
 # ---------------------------------------------------------------- main
 if __name__ == "__main__":
@@ -388,17 +399,7 @@ if __name__ == "__main__":
 
     configs = []
     for seed in seeds:
-        var_keys = ["seed", "split", "aggregator"]
-        sub_keys = ["eval", "wandb"]
-
-        cfg = copy.deepcopy(orig_cfg)
-        cfg["seed"] = seed
-
-        cfg["wandb"]["run_name"] = cfg["wandb"]["run_name"].format(**cfg)
-        cfg["save_dir"] = cfg["save_dir"].format(**cfg)
-        cfg["eval"]["score_path"] = cfg["eval"]["score_path"].format(**{**cfg, **cfg["eval"]})
-        cfg["eval"]["plots_path"] = cfg["eval"]["plots_path"].format(**{**cfg, **cfg["eval"]})
-
+        cfg = prepare_cfg(orig_cfg, seed)
         configs.append(cfg.copy())
 
     if max_workers > 1:
