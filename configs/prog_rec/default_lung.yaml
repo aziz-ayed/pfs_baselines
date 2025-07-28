@@ -1,0 +1,41 @@
+# Data & Path Settings
+feature_dir: "/storage/azizayed/features_hoptimus1"
+split_file: "data/final_splits_prog_rec.pt"
+clinical_csv: "data/outcomes/clinical_data_prog_rec.csv"
+ckpt_dir: "checkpoints/new_split_colon"
+
+# Model Configuration
+aggregator: "AttnMILNew"      # MeanPool | MaxPool | AttnMIL | transmil
+feature_dim: null          # 768 or 1536; null -> auto
+topk_corr: 256             # for TransMIL
+single_organ_study: &organ_list ['Colon'] 
+train_on_organs: *organ_list
+
+# Training Hyperparameters
+seed: 0
+epochs: 500
+batch_size: 8              # slides per GPU
+grad_accum_steps: 4
+learning_rate: 5e-5
+weight_decay: 1e-4
+train_frac: 1
+dropout_p: 0.25
+
+# Hardware & Dataloader Settings
+gpus: [0,1,2,3,4,5,6,7]
+num_workers: 4
+prefetch_factor: 4
+persistent_workers: true
+
+# Logging & Checkpointing
+save_checkpoints: True
+log_every: 50              # Note: This is currently unused by the script
+#resume_path: "checkpoints/model_best.pth"
+
+wandb:
+  project: tcga_survival_baselines
+  run_name: new_split_colon
+  mode: online             # "online" | "offline" | "disabled"
+  group: optimus1
+  log_grads: false         # true = wandb.watch(model)
+  id: new_split_colonx
