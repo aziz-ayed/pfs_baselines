@@ -67,9 +67,8 @@ def main():
         dim = f["features"].shape[1]
 
     # This tuple now includes the test set
-    split_data_tuple = (train_paths, val_paths, test_paths, dim)
+
     
-    torch.save(split_data_tuple, opts.output)
     print(f"✅ Successfully saved data splits to {opts.output}")
     print(f"Training slides: {len(train_paths)}, Validation slides: {len(val_paths)}, Test slides: {len(test_paths)}")
 
