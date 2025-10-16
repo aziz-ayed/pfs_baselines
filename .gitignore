@@ -5,3 +5,4 @@ checkpoints/
 eval_outputs/
 temporary/
 data/
+.ipynb_checkpoints/
