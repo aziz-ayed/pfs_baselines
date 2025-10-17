@@ -1,25 +1,24 @@
----
-
 # Survival Baselines for TCGA Patch-level Embeddings (with Multimodal RNA Fusion)
 
-A modular research framework for **weakly supervised survival prediction** using **multiple instance learning (MIL)** on whole-slide embeddings and **RNA-guided multimodal fusion**.
-Built for scalable PyTorch training, attention-based interpretability, and reproducible benchmarking across TCGA cohorts.
+This folder, pulled fro the github [repository](https://github.com/aziz-ayed/pfs_baselines) contains a modular research framework for a fusion algorithm incorporating whole-slide embeddings and **RNA-guided multimodal fusion** with clinical data.
 
----
+This code was built for scalable PyTorch training, attention-based interpretability, and reproducible benchmarking across TCGA cohorts.
 
 ## What’s inside
 
-* **Aggregators (unimodal pathology)**
+As a modular framework, users can choose to use different versions of various functions. Notably:
+
+* **Aggregators (for unimodal pathology)**
 
   * `MeanPoolCox`, `MaxPoolCox`, `AttnMILCox`, `TransMILCox`, `AttnMILNewCox` — from simple pooling to gated attention and transformer-based MIL. 
-* **Multimodal (pathology + RNA)**
+* **Multimodal Aggregators (for pathology + RNA)**
 
   * `MultimodalCox`: combines AttnMILNew slide embeddings with a 640-D RNA latent via late fusion into a Cox head. 
 * **Training**: DDP-ready, AMP-enabled (autocast + GradScaler), patient-level stratified splits, per-organ metrics, W&B logging, and full checkpointing.  
 * **Evaluation**: Harrell’s C-index + time-dependent AUC (t-AUC). 
 * **Utilities**:
 
-  * `prepare_data_splits.py`: patient-level 70/15/15 splits from features + clinical CSV. 
+  * `prepare_data_splits.py`: creates patient-level training/validation/test 70/15/15 splits from features + clinical CSV. 
   * `dump_attentions.py`: exports gated-attention weights aligned to patch coordinates. 
 
 ---
@@ -52,13 +51,15 @@ Built for scalable PyTorch training, attention-based interpretability, and repro
 * **Organs / cohorts**: current mapping groups TCGA projects into `{Lung, Colon, Breast}`; single-organ filtering supported. 
 * **RNA latents (multimodal)**: per-patient 640-D latents (`latent_0 … latent_639`), intersected across **features ∩ clinical ∩ RNA**.  
 
-> 💡 If not using RNA, set `model: AttnMILNewCox` (or any unimodal variant). For multimodal setups, use `model: MultimodalCox`. 
+
 
 ---
 
 ## Configuration
 
-Edit `configs/default.yaml`:
+You can change the config files to customize the models:
+
+> 💡 If not using RNA, set `model: AttnMILNewCox` (or any unimodal variant). For multimodal setups, use `model: MultimodalCox`. 
 
 * **Paths**
 
@@ -111,8 +112,9 @@ Edit `configs/default.yaml`:
 
 
 ---
+# Usage 
 
-## 1️⃣ Prepare patient-level splits
+## 1. Prepare patient-level splits
 
 Generates patient-stratified 70/15/15 splits and saves a tuple `(train_paths, val_paths, test_paths, feature_dim)` to `--output`.  
 
@@ -124,7 +126,7 @@ python prepare_data_splits.py \
 
 ---
 
-## 2️⃣ Train
+## 2. Train
 
 **DDP (recommended):**
 
@@ -141,7 +143,7 @@ torchrun --standalone --nproc_per_node=7 \
 
 ---
 
-## 3️⃣ Evaluate
+## 3. Evaluate
 
 ```bash
 python eval.py \
@@ -156,7 +158,7 @@ python eval.py \
 
 ---
 
-## 4️⃣ (Optional) Dump patch attentions
+## 4. (Optional) Dump patch attentions
 
 For AttnMIL-style models, export patch-level attention maps:
 
@@ -173,7 +175,7 @@ python dump_attentions.py \
 
 ---
 
-## 🔁 Reproducibility
+## 5. Reproducibility
 
 ```python
 from src.seed import set_seed
@@ -184,7 +186,7 @@ set_seed(42)
 
 ---
 
-## 🧩 Notes & tips
+## 6. Notes & tips
 
 * **Multimodal RNA**: `MultimodalCox` expects a 640-D latent per patient; update the CSV path in `src/dataset.py`. 
 * **Feature dim**: auto-detected unless specified.  
@@ -193,9 +195,14 @@ set_seed(42)
 
 ---
 
-## ⚡ Quick start (end-to-end)
+# Quick start (end-to-end)
+
+You can run this code easily by doing the following three commands once you have configured your `default.yaml` file.
 
 ```bash
+# 0) Setup the required modules
+pip install -r requirements.txt
+
 # 1) Prepare splits
 python prepare_data_splits.py --config configs/default.yaml --output data/clean_splits.pt
 
@@ -212,6 +219,6 @@ python eval.py --checkpoint checkpoints/multimodal_latest/model_best.pth \
 
 ## Citation
 
-If you use this code, please cite the relevant MIL and survival analysis works, and acknowledge this repository.
+If you use this code, please cite the relevant MIL and survival analysis works, and acknowledge the github repository.
 
 ---
